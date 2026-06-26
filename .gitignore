@@ -1,0 +1,49 @@
+# --- Variables de entorno y credenciales ---
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# --- Python (backend FastAPI) ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv/
+*.egg-info/
+.pytest_cache/
+
+# --- Node / React (frontend) ---
+node_modules/
+dist/
+build/
+.next/
+.vercel/
+*.local
+
+# --- Logs ---
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# --- Editor / Sistema operativo ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- Bases de datos locales (si se usan para pruebas) ---
+*.sqlite3
+*.db
+
+# --- Archivos exportados con datos reales (PDFs, Excel generados) ---
+/exports/
+*.xlsx
+*.pdf
+!docs/*.pdf
