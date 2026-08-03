@@ -42,6 +42,7 @@ class Articulo(Base):
     costo_unitario = Column(Numeric(10, 2))
     estado = Column(String(20), nullable=False, default="activo")
     observaciones = Column(String(200))
+    imagen_url = Column(String(500), nullable=True)
 
     categoria = relationship("Categoria", back_populates="articulos")
 
@@ -97,6 +98,8 @@ class DetalleEvento(Base):
 
     evento = relationship("Evento", back_populates="detalles")
     articulo = relationship("Articulo")
+
+    precio_override = Column(Numeric(10, 2), nullable=True)
 
     __table_args__ = (
         UniqueConstraint("id_evento", "id_articulo", name="uq_detalle_evento_articulo"),

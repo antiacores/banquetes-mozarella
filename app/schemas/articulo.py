@@ -11,6 +11,7 @@ class ArticuloBase(BaseModel):
     costo_unitario: Optional[Decimal] = None
     estado: str = "activo"
     observaciones: Optional[str] = None
+    imagen_url: Optional[str] = None
 
 class ArticuloCrear(ArticuloBase):
     pass

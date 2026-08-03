@@ -6,6 +6,7 @@ from app.schemas.baja_inventario import BajaInventarioCrear, BajaInventarioRespu
 
 router = APIRouter(prefix="/bajas", tags=["Bajas de Inventario"])
 
+
 @router.get("/", response_model=list[BajaInventarioRespuesta])
 def listar_bajas(
     id_articulo: int | None = Query(default=None),
@@ -22,6 +23,7 @@ def listar_bajas(
         consulta = consulta.filter(models.BajaInventario.motivo == motivo)
     return consulta.order_by(models.BajaInventario.fecha.desc()).all()
 
+
 @router.get("/{id_baja}", response_model=BajaInventarioRespuesta)
 def obtener_baja(id_baja: int, db: Session = Depends(get_db)):
     baja = db.query(models.BajaInventario).filter(
@@ -31,12 +33,9 @@ def obtener_baja(id_baja: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Baja no encontrada")
     return baja
 
+
 @router.post("/", response_model=BajaInventarioRespuesta, status_code=201)
 def registrar_baja(datos: BajaInventarioCrear, db: Session = Depends(get_db)):
-    """
-    Registra una baja de inventario. El trigger de la BD (trg_baja_inventario)
-    descuenta automáticamente cantidad_total y cantidad_disponible del artículo.
-    """
     articulo = db.query(models.Articulo).filter(
         models.Articulo.id_articulo == datos.id_articulo
     ).first()
@@ -62,3 +61,27 @@ def registrar_baja(datos: BajaInventarioCrear, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(nueva)
     return nueva
+
+
+@router.delete("/{id_baja}", status_code=204)
+def eliminar_baja(id_baja: int, db: Session = Depends(get_db)):
+    """
+    Elimina una baja y revierte el descuento en el inventario.
+    Útil para corregir errores de captura.
+    """
+    baja = db.query(models.BajaInventario).filter(
+        models.BajaInventario.id_baja == id_baja
+    ).first()
+    if not baja:
+        raise HTTPException(status_code=404, detail="Baja no encontrada")
+
+    # Revertir el descuento en el artículo
+    articulo = db.query(models.Articulo).filter(
+        models.Articulo.id_articulo == baja.id_articulo
+    ).first()
+    if articulo:
+        articulo.cantidad_total      += baja.cantidad
+        articulo.cantidad_disponible += baja.cantidad
+
+    db.delete(baja)
+    db.commit()
