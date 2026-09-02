@@ -1,5 +1,4 @@
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -8,6 +7,10 @@ from decimal import Decimal
 from datetime import date
 from app.database import get_db
 from app import models
+
+# Usar los modelos de models.py — NO redefinir aquí
+Renta       = models.Renta
+DetalleRenta = models.DetalleRenta
 
 
 class DetalleRentaIn(BaseModel):
@@ -35,49 +38,14 @@ class RentaActualizar(BaseModel):
     notas: Optional[str] = None
 
 
-from sqlalchemy import Column, Integer, String, Numeric, Date, DateTime, ForeignKey, CheckConstraint, UniqueConstraint
-from sqlalchemy.sql import func
-from app.database import Base
-
-
-class Renta(Base):
-    __tablename__ = "renta"
-    id_renta         = Column(Integer, primary_key=True, index=True)
-    nombre_cliente   = Column(String(150), nullable=False)
-    telefono         = Column(String(20))
-    fecha_entrega    = Column(Date, nullable=False)
-    fecha_devolucion = Column(Date)
-    estado           = Column(String(20), nullable=False, default="cotizacion")
-    notas            = Column(String(300))
-    creado_en        = Column(DateTime, server_default=func.now())
-
-    __table_args__ = (
-        CheckConstraint(
-            "estado IN ('cotizacion','confirmada','entregada','devuelta','cancelada')",
-            name="ck_renta_estado"
-        ),
-    )
-
-
-class DetalleRenta(Base):
-    __tablename__ = "detallerenta"
-    id_detalle_renta = Column(Integer, primary_key=True, index=True)
-    id_renta         = Column(Integer, ForeignKey("renta.id_renta"), nullable=False)
-    id_articulo      = Column(Integer, ForeignKey("articulo.id_articulo"), nullable=False)
-    cantidad         = Column(Integer, nullable=False)
-    precio_unitario  = Column(Numeric(10, 2), nullable=False, default=0)
-
-    __table_args__ = (
-        UniqueConstraint("id_renta", "id_articulo", name="uq_detalle_renta"),
-    )
-
-
 router = APIRouter(prefix="/rentas", tags=["Rentas"])
 
 
 @router.get("/")
 def listar_rentas(db: Session = Depends(get_db)):
-    resultado = db.execute(text("SELECT * FROM vw_rentas_con_total ORDER BY creado_en DESC")).mappings().all()
+    resultado = db.execute(
+        text("SELECT * FROM vw_rentas_con_total ORDER BY creado_en DESC")
+    ).mappings().all()
     return [dict(r) for r in resultado]
 
 
@@ -100,14 +68,14 @@ def obtener_renta(id_renta: int, db: Session = Depends(get_db)):
     ).mappings().all()
 
     return {
-        "id_renta": renta.id_renta,
-        "nombre_cliente": renta.nombre_cliente,
-        "telefono": renta.telefono,
-        "fecha_entrega": renta.fecha_entrega,
+        "id_renta":        renta.id_renta,
+        "nombre_cliente":  renta.nombre_cliente,
+        "telefono":        renta.telefono,
+        "fecha_entrega":   renta.fecha_entrega,
         "fecha_devolucion": renta.fecha_devolucion,
-        "estado": renta.estado,
-        "notas": renta.notas,
-        "articulos": [dict(d) for d in detalles],
+        "estado":          renta.estado,
+        "notas":           renta.notas,
+        "articulos":       [dict(d) for d in detalles],
     }
 
 
@@ -122,7 +90,7 @@ def crear_renta(datos: RentaCrear, db: Session = Depends(get_db)):
         notas=datos.notas,
     )
     db.add(nueva)
-    db.flush()  # obtenemos el id_renta antes del commit
+    db.flush()
 
     for art in datos.articulos:
         detalle = DetalleRenta(
@@ -139,7 +107,11 @@ def crear_renta(datos: RentaCrear, db: Session = Depends(get_db)):
 
 
 @router.put("/{id_renta}")
-def actualizar_renta(id_renta: int, datos: RentaActualizar, db: Session = Depends(get_db)):
+def actualizar_renta(
+    id_renta: int,
+    datos: RentaActualizar,
+    db: Session = Depends(get_db),
+):
     renta = db.query(Renta).filter(Renta.id_renta == id_renta).first()
     if not renta:
         raise HTTPException(status_code=404, detail="Renta no encontrada")
