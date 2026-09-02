@@ -8,7 +8,8 @@ import { useAuth, esJefe } from "../lib/AuthContext";
 
 const VACIO = {
   nombre_cliente: "", fecha: "", tipo: "",
-  lugar: "", num_invitados: "", estado: "cotizacion", observaciones: "",
+  lugar: "", num_invitados: "", estado: "cotizacion",
+  observaciones: "", id_cliente: "",
 };
 
 const TONO_ESTADO = {
@@ -17,16 +18,16 @@ const TONO_ESTADO = {
 };
 
 const ESTADOS = ["cotizacion", "pendiente", "confirmado", "cancelado"];
-// "finalizado" no aparece en el selector — solo se puede finalizar desde el detalle
 
 export default function Eventos() {
   const { usuario } = useAuth();
   const puedeEditar = esJefe(usuario);
   const navigate    = useNavigate();
 
-  const [eventos, setEventos]     = useState([]);
-  const [cargando, setCargando]   = useState(true);
-  const [error, setError]         = useState(null);
+  const [eventos, setEventos]   = useState([]);
+  const [clientes, setClientes] = useState([]);
+  const [cargando, setCargando] = useState(true);
+  const [error, setError]       = useState(null);
 
   const [modalNuevo, setModalNuevo] = useState(false);
   const [form, setForm]             = useState(VACIO);
@@ -39,8 +40,12 @@ export default function Eventos() {
 
   async function cargar() {
     try {
-      const data = await listarEventos();
+      const [data, clientesData] = await Promise.all([
+        listarEventos(),
+        api.get("/clientes/").then(r => r.data),
+      ]);
       setEventos(data);
+      setClientes(clientesData);
     } catch {
       setError("No se pudo conectar con el servidor.");
     } finally {
@@ -57,6 +62,7 @@ export default function Eventos() {
       await crearEvento({
         ...form,
         num_invitados: form.num_invitados === "" ? null : Number(form.num_invitados),
+        id_cliente:    form.id_cliente    ? Number(form.id_cliente) : null,
       });
       setModalNuevo(false);
       setForm(VACIO);
@@ -97,7 +103,6 @@ export default function Eventos() {
     };
   }
 
-  // Separar activos (todo menos finalizado) de finalizados
   const eventosActivos     = eventos.filter(ev => ev.estado !== "finalizado");
   const eventosFinalizados = eventos.filter(ev => ev.estado === "finalizado");
 
@@ -123,9 +128,7 @@ export default function Eventos() {
           </div>
         </button>
 
-        {/* Badge de estado */}
         {puedeEditar && !esFinalizado ? (
-          // Jefe + no finalizado → puede cambiar estado
           <button
             onClick={() => { setEditandoEstado(ev); setNuevoEstado(ev.estado); }}
             className="shrink-0 group/estado" title="Cambiar estado"
@@ -136,7 +139,6 @@ export default function Eventos() {
             </Badge>
           </button>
         ) : (
-          // Almacén, o evento finalizado → solo visual
           <Badge tono={TONO_ESTADO[ev.estado] || "neutro"}>{ev.estado}</Badge>
         )}
 
@@ -144,7 +146,6 @@ export default function Eventos() {
           <ChevronRight size={16} className="text-ink-soft" />
         </button>
 
-        {/* Eliminar — solo jefe, siempre disponible incluso en finalizados */}
         {puedeEditar && (
           <button
             onClick={() => setConfirmarEliminar({ id: ev.id_evento, nombre: ev.nombre_cliente || "este evento" })}
@@ -191,7 +192,7 @@ export default function Eventos() {
         )}
       </div>
 
-      {/* Eventos finalizados — sección separada */}
+      {/* Eventos finalizados */}
       {eventosFinalizados.length > 0 && (
         <div>
           <div className="flex items-center gap-3 mb-3">
@@ -212,6 +213,23 @@ export default function Eventos() {
       {/* Modal nuevo evento */}
       <Modal abierto={modalNuevo} onCerrar={() => setModalNuevo(false)} titulo="Nuevo evento">
         <form onSubmit={guardar} className="flex flex-col gap-4">
+          {/* Selector de cliente registrado */}
+          <Campo etiqueta="Cliente (opcional)">
+            <Select value={form.id_cliente}
+              onChange={e => {
+                const sel = clientes.find(c => c.id_cliente === Number(e.target.value));
+                setForm({
+                  ...form,
+                  id_cliente: e.target.value,
+                  nombre_cliente: sel ? sel.nombre : form.nombre_cliente,
+                });
+              }}>
+              <option value="">Sin cliente registrado</option>
+              {clientes.map(c => (
+                <option key={c.id_cliente} value={c.id_cliente}>{c.nombre}</option>
+              ))}
+            </Select>
+          </Campo>
           <Campo etiqueta="Nombre del cliente">
             <Input value={form.nombre_cliente}
               onChange={e => setForm({ ...form, nombre_cliente: e.target.value })}
@@ -256,7 +274,7 @@ export default function Eventos() {
         </form>
       </Modal>
 
-      {/* Modal editar estado — solo para no finalizados */}
+      {/* Modal editar estado */}
       <Modal abierto={!!editandoEstado} onCerrar={() => setEditandoEstado(null)} titulo="Cambiar estado del evento">
         <form onSubmit={guardarEstado} className="flex flex-col gap-4">
           <p className="text-sm text-ink-soft">

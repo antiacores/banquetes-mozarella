@@ -1,67 +1,96 @@
 import { useEffect, useState } from "react";
-import { Plus, Trash2 } from "lucide-react";
-import { listarBajas, listarArticulos, listarEventos, registrarBaja } from "../lib/api";
+import { Plus, Trash2, Check, X } from "lucide-react";
+import { listarArticulos, listarEventos } from "../lib/api";
 import { api } from "../lib/api";
 import { Boton, Modal, Campo, Input, Select, Badge } from "../components/ui";
+import { useAuth, esJefe } from "../lib/AuthContext";
 
-const VACIO = { id_articulo: "", id_evento: "", cantidad: "", motivo: "roto", descripcion: "" };
+const VACIO = {
+  id_articulo: "", id_evento: "", cantidad: "",
+  motivo: "roto", descripcion: "", nombre_trabajador: "",
+};
 
 const TONO_MOTIVO = {
   roto: "alerta", perdido: "alerta", desgaste: "dorado", otro: "neutro",
 };
 
+const TONO_ESTADO_AUTH = {
+  pendiente: "dorado", aprobada: "bueno", rechazada: "alerta",
+};
+
 export default function Bajas() {
+  const { usuario } = useAuth();
+  const puedeEditar = esJefe(usuario);
+
   const [bajas, setBajas]         = useState([]);
   const [articulos, setArticulos] = useState([]);
   const [eventos, setEventos]     = useState([]);
   const [cargando, setCargando]   = useState(true);
-  const [error, setError]         = useState(null);
+  const [filtroEstado, setFiltroEstado] = useState("");
 
   const [modalAbierto, setModalAbierto] = useState(false);
   const [form, setForm]                 = useState(VACIO);
   const [guardando, setGuardando]       = useState(false);
 
+  const [modalAutorizar, setModalAutorizar] = useState(null);
+  const [notasJefe, setNotasJefe]           = useState("");
+
   const [confirmarEliminar, setConfirmarEliminar] = useState(null);
 
   async function cargar() {
     try {
+      const params = filtroEstado ? { estado: filtroEstado } : {};
       const [b, a, e] = await Promise.all([
-        listarBajas(), listarArticulos(), listarEventos()
+        api.get("/bajas/", { params }).then(r => r.data),
+        listarArticulos(),
+        listarEventos(),
       ]);
       setBajas(b);
       setArticulos(a);
       setEventos(e);
     } catch {
-      setError("No se pudo conectar con el servidor.");
+      // silencioso
     } finally {
       setCargando(false);
     }
   }
 
-  useEffect(() => { cargar(); }, []);
+  useEffect(() => { cargar(); }, [filtroEstado]);
 
   async function guardar(e) {
     e.preventDefault();
     setGuardando(true);
     try {
-      await registrarBaja({
-        id_articulo:  Number(form.id_articulo),
-        id_evento:    form.id_evento ? Number(form.id_evento) : null,
-        cantidad:     Number(form.cantidad),
-        motivo:       form.motivo,
-        descripcion:  form.descripcion,
+      await api.post("/bajas/", {
+        id_articulo:       Number(form.id_articulo),
+        id_evento:         form.id_evento ? Number(form.id_evento) : null,
+        cantidad:          Number(form.cantidad),
+        motivo:            form.motivo,
+        descripcion:       form.descripcion,
+        nombre_trabajador: form.nombre_trabajador,
       });
       setModalAbierto(false);
       setForm(VACIO);
       await cargar();
     } catch (err) {
-      alert(err?.response?.data?.detail || "Ocurrió un error al registrar la baja.");
+      alert(err?.response?.data?.detail || "Error al registrar.");
     } finally {
       setGuardando(false);
     }
   }
 
-  async function eliminarBaja(id) {
+  async function autorizar(id, accion) {
+    try {
+      await api.put(`/bajas/${id}/autorizar`, { accion, notas_jefe: notasJefe });
+      setModalAutorizar(null);
+      setNotasJefe("");
+      await cargar();
+    } catch (err) {
+      alert(err?.response?.data?.detail || "Error.");
+    }
+  }
+
+  async function eliminar(id) {
     try {
       await api.delete(`/bajas/${id}`);
       setConfirmarEliminar(null);
@@ -71,15 +100,7 @@ export default function Bajas() {
     }
   }
 
-  function nombreArticulo(id) {
-    return articulos.find(a => a.id_articulo === id)?.nombre || `Artículo #${id}`;
-  }
-
-  function nombreEvento(id) {
-    if (!id) return "Sin evento (bodega)";
-    const ev = eventos.find(e => e.id_evento === id);
-    return ev ? `${ev.tipo} · ${ev.nombre_cliente || "sin nombre"}` : `Evento #${id}`;
-  }
+  const pendientes = bajas.filter(b => b.estado_autorizacion === "pendiente").length;
 
   if (cargando) return (
     <div className="min-h-screen flex items-center justify-center">
@@ -92,15 +113,35 @@ export default function Bajas() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <p className="text-xs font-medium text-gold-deep uppercase tracking-wider mb-1">Inventario</p>
-          <h1 className="font-display text-2xl font-semibold">Bajas</h1>
+          <h1 className="font-display text-2xl font-semibold">
+            Bajas
+            {pendientes > 0 && puedeEditar && (
+              <span className="ml-2 text-sm font-normal text-alert">
+                ({pendientes} pendiente{pendientes !== 1 ? "s" : ""})
+              </span>
+            )}
+          </h1>
         </div>
-        <Boton variante="dorado" onClick={() => setModalAbierto(true)}>
+        <Boton variante="dorado" onClick={() => { setForm(VACIO); setModalAbierto(true); }}>
           <span className="flex items-center gap-1.5"><Plus size={16} /> Registrar baja</span>
         </Boton>
       </div>
 
-      {error && (
-        <div className="bg-alert-pale text-alert text-sm rounded-lg px-4 py-3 mb-4">{error}</div>
+      {/* Filtro por estado — solo jefe */}
+      {puedeEditar && (
+        <div className="flex gap-2 mb-4">
+          {["", "pendiente", "aprobada", "rechazada"].map(estado => (
+            <button key={estado}
+              onClick={() => setFiltroEstado(estado)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                filtroEstado === estado
+                  ? "bg-ink text-white"
+                  : "bg-mist text-ink-soft hover:bg-paper border border-line"
+              }`}>
+              {estado === "" ? "Todas" : estado}
+            </button>
+          ))}
+        </div>
       )}
 
       <div className="bg-paper rounded-xl border border-line overflow-hidden">
@@ -108,41 +149,63 @@ export default function Bajas() {
           <thead>
             <tr className="border-b border-line text-left text-xs text-ink-soft uppercase tracking-wide">
               <th className="px-4 py-3 font-medium">Artículo</th>
-              <th className="px-4 py-3 font-medium text-right">Cantidad</th>
+              <th className="px-4 py-3 font-medium text-right">Cant.</th>
               <th className="px-4 py-3 font-medium">Motivo</th>
-              <th className="px-4 py-3 font-medium">Evento</th>
+              <th className="px-4 py-3 font-medium">Trabajador</th>
               <th className="px-4 py-3 font-medium">Fecha</th>
+              {puedeEditar && <th className="px-4 py-3 font-medium">Estado</th>}
               <th className="px-4 py-3"></th>
             </tr>
           </thead>
           <tbody>
             {bajas.map(b => (
-              <tr key={b.id_baja} className="border-b border-line last:border-0 group hover:bg-mist/50">
-                <td className="px-4 py-3 font-medium">{nombreArticulo(b.id_articulo)}</td>
+              <tr key={b.id_baja}
+                className={`border-b border-line last:border-0 group hover:bg-mist/50 ${
+                  b.estado_autorizacion === "pendiente" ? "bg-gold-pale/20" : ""
+                }`}>
+                <td className="px-4 py-3 font-medium">{b.nombre_articulo}</td>
                 <td className="px-4 py-3 text-right">{b.cantidad}</td>
                 <td className="px-4 py-3">
                   <Badge tono={TONO_MOTIVO[b.motivo]}>{b.motivo}</Badge>
                 </td>
-                <td className="px-4 py-3 text-ink-soft text-xs">{nombreEvento(b.id_evento)}</td>
+                <td className="px-4 py-3 text-ink-soft text-xs">
+                  {b.nombre_trabajador || "—"}
+                </td>
                 <td className="px-4 py-3 text-ink-soft">
                   {new Date(b.fecha + "T00:00:00").toLocaleDateString("es-MX", {
-                    day: "numeric", month: "short", year: "numeric"
+                    day: "numeric", month: "short",
                   })}
                 </td>
+                {puedeEditar && (
+                  <td className="px-4 py-3">
+                    {b.estado_autorizacion === "pendiente" ? (
+                      <button
+                        onClick={() => { setModalAutorizar(b); setNotasJefe(""); }}
+                        className="flex items-center gap-1 text-xs font-medium text-gold-deep hover:underline">
+                        <Badge tono="dorado">pendiente</Badge>
+                      </button>
+                    ) : (
+                      <Badge tono={TONO_ESTADO_AUTH[b.estado_autorizacion]}>
+                        {b.estado_autorizacion}
+                      </Badge>
+                    )}
+                  </td>
+                )}
                 <td className="px-4 py-3 text-right">
-                  <button
-                    onClick={() => setConfirmarEliminar(b)}
-                    className="text-ink-soft hover:text-alert opacity-0 group-hover:opacity-100 transition-opacity"
-                    title="Eliminar baja"
-                  >
-                    <Trash2 size={14} />
-                  </button>
+                  {puedeEditar && (
+                    <button
+                      onClick={() => setConfirmarEliminar(b)}
+                      className="text-ink-soft hover:text-alert opacity-0 group-hover:opacity-100 transition-opacity">
+                      <Trash2 size={14} />
+                    </button>
+                  )}
                 </td>
               </tr>
             ))}
             {bajas.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-4 py-8 text-center text-ink-soft">
+                <td colSpan={puedeEditar ? 7 : 6}
+                  className="px-4 py-8 text-center text-ink-soft">
                   No hay bajas registradas.
                 </td>
               </tr>
@@ -154,6 +217,14 @@ export default function Bajas() {
       {/* Modal registrar baja */}
       <Modal abierto={modalAbierto} onCerrar={() => setModalAbierto(false)} titulo="Registrar baja">
         <form onSubmit={guardar} className="flex flex-col gap-4">
+          {/* Nombre del trabajador — obligatorio para almacén */}
+          {!puedeEditar && (
+            <Campo etiqueta="Tu nombre completo">
+              <Input required value={form.nombre_trabajador}
+                placeholder="Escribe tu nombre"
+                onChange={e => setForm({ ...form, nombre_trabajador: e.target.value })} />
+            </Campo>
+          )}
           <Campo etiqueta="Artículo">
             <Select required value={form.id_articulo}
               onChange={e => setForm({ ...form, id_articulo: e.target.value })}>
@@ -183,10 +254,10 @@ export default function Bajas() {
           <Campo etiqueta="Evento relacionado (opcional)">
             <Select value={form.id_evento}
               onChange={e => setForm({ ...form, id_evento: e.target.value })}>
-              <option value="">Sin evento (baja en bodega)</option>
-              {eventos.map(e => (
-                <option key={e.id_evento} value={e.id_evento}>
-                  {e.tipo} · {e.nombre_cliente || "sin nombre"} ({e.fecha})
+              <option value="">Sin evento</option>
+              {eventos.map(ev => (
+                <option key={ev.id_evento} value={ev.id_evento}>
+                  {ev.tipo} · {ev.nombre_cliente || "sin nombre"} ({ev.fecha})
                 </option>
               ))}
             </Select>
@@ -195,10 +266,13 @@ export default function Bajas() {
             <Input value={form.descripcion}
               onChange={e => setForm({ ...form, descripcion: e.target.value })} />
           </Campo>
+          {!puedeEditar && (
+            <div className="bg-gold-pale rounded-lg px-3 py-2 text-xs text-gold-deep">
+              Tu baja quedará pendiente de autorización del administrador.
+            </div>
+          )}
           <div className="flex justify-end gap-2 pt-2">
-            <Boton variante="fantasma" type="button" onClick={() => setModalAbierto(false)}>
-              Cancelar
-            </Boton>
+            <Boton variante="fantasma" type="button" onClick={() => setModalAbierto(false)}>Cancelar</Boton>
             <Boton variante="dorado" type="submit" disabled={guardando}>
               {guardando ? "Guardando..." : "Registrar"}
             </Boton>
@@ -206,24 +280,57 @@ export default function Bajas() {
         </form>
       </Modal>
 
+      {/* Modal autorizar baja — solo jefe */}
+      <Modal abierto={!!modalAutorizar} onCerrar={() => setModalAutorizar(null)}
+        titulo="Autorizar baja">
+        {modalAutorizar && (
+          <div className="flex flex-col gap-4">
+            <div className="bg-mist rounded-lg px-4 py-3 text-sm">
+              <p><span className="text-ink-soft">Artículo:</span> <strong>{modalAutorizar.nombre_articulo}</strong></p>
+              <p><span className="text-ink-soft">Cantidad:</span> <strong>{modalAutorizar.cantidad}</strong></p>
+              <p><span className="text-ink-soft">Motivo:</span> {modalAutorizar.motivo}</p>
+              <p><span className="text-ink-soft">Trabajador:</span> {modalAutorizar.nombre_trabajador || "—"}</p>
+              {modalAutorizar.descripcion && (
+                <p><span className="text-ink-soft">Descripción:</span> {modalAutorizar.descripcion}</p>
+              )}
+            </div>
+            <Campo etiqueta="Notas del jefe (opcional)">
+              <Input value={notasJefe} onChange={e => setNotasJefe(e.target.value)}
+                placeholder="Motivo de aprobación o rechazo..." />
+            </Campo>
+            <div className="flex gap-2 justify-end">
+              <Boton variante="fantasma" onClick={() => setModalAutorizar(null)}>Cancelar</Boton>
+              <button
+                onClick={() => autorizar(modalAutorizar.id_baja, "rechazar")}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium
+                           bg-alert-pale text-alert hover:bg-alert/10 transition-colors">
+                <X size={15} /> Rechazar
+              </button>
+              <button
+                onClick={() => autorizar(modalAutorizar.id_baja, "aprobar")}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium
+                           bg-ink text-white hover:bg-ink/90 transition-colors">
+                <Check size={15} /> Aprobar
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
       {/* Modal confirmar eliminar */}
       <Modal abierto={!!confirmarEliminar} onCerrar={() => setConfirmarEliminar(null)}
         titulo="Eliminar baja">
         <div className="flex flex-col gap-4">
           <p className="text-sm text-ink-soft">
-            ¿Segura que quieres eliminar esta baja?
-            <br />
-            <span className="font-medium text-ink">
-              {confirmarEliminar ? nombreArticulo(confirmarEliminar.id_articulo) : ""} · {confirmarEliminar?.cantidad} pzas · {confirmarEliminar?.motivo}
-            </span>
-            <br /><br />
-            El inventario se revertirá automáticamente ({confirmarEliminar?.cantidad} piezas
-            regresarán al inventario).
+            ¿Eliminar esta baja de <span className="font-medium text-ink">
+            {confirmarEliminar?.nombre_articulo}</span>?
+            {confirmarEliminar?.estado_autorizacion === "aprobada" &&
+              " El inventario se revertirá automáticamente."}
           </p>
           <div className="flex justify-end gap-2">
             <Boton variante="fantasma" onClick={() => setConfirmarEliminar(null)}>Cancelar</Boton>
-            <Boton variante="peligro" onClick={() => eliminarBaja(confirmarEliminar.id_baja)}>
-              Eliminar y revertir
+            <Boton variante="peligro" onClick={() => eliminar(confirmarEliminar.id_baja)}>
+              Eliminar
             </Boton>
           </div>
         </div>

@@ -8,9 +8,10 @@ import { obtenerEvento, listarCategorias } from "../lib/api";
 import { api } from "../lib/api";
 import { Boton, Badge, Modal, Campo, Input, Select } from "../components/ui";
 import ChecklistInventario from "../components/ChecklistInventario";
+import ListaCajon from "../components/ListaCajon";
+import ModalCotizacion from "../components/ModalCotizacion";
 import { useAuth, esJefe } from "../lib/AuthContext";
 import { abrirPdf } from "../lib/pdf";
-
 
 const TONO_ESTADO = {
   confirmado: "bueno", pendiente: "dorado",
@@ -38,7 +39,7 @@ export default function DetalleEvento() {
   const [cargando, setCargando]     = useState(true);
   const [error, setError]           = useState(null);
 
-  const [checklist, setChecklist]               = useState({});
+  const [checklist, setChecklist]                   = useState({});
   const [guardandoChecklist, setGuardandoChecklist] = useState(false);
 
   const [editandoPrecio, setEditandoPrecio] = useState(null);
@@ -48,7 +49,6 @@ export default function DetalleEvento() {
   const [cantDevuelta, setCantDevuelta]       = useState("");
 
   const [modalCotizacion, setModalCotizacion] = useState(false);
-  const [flete, setFlete]                     = useState(0);
 
   const [modalFinalizar, setModalFinalizar] = useState(false);
   const [filasFinalizar, setFilasFinalizar] = useState([]);
@@ -67,7 +67,6 @@ export default function DetalleEvento() {
       setDetalles(dets);
       setCategorias(cats);
       setAlertas(al.alertas || []);
-
       const inicial = {};
       dets.forEach(d => { inicial[d.id_articulo] = d.cantidad_asignada; });
       setChecklist(inicial);
@@ -147,12 +146,6 @@ export default function DetalleEvento() {
       alert(err?.response?.data?.detail || "Error.");
     }
   }
-
-  function exportarCotizacion(e) {
-  e.preventDefault();
-  abrirPdf(`/pdf/evento/${id}/cotizacion?flete=${flete}`);
-  setModalCotizacion(false);
-}
 
   function abrirFinalizar() {
     setFilasFinalizar(detalles.map(d => ({
@@ -312,7 +305,6 @@ export default function DetalleEvento() {
                   <th className="px-3 py-3 font-medium">Artículo</th>
                   <th className="px-3 py-3 font-medium text-right">Aprtd.</th>
                   <th className="px-3 py-3 font-medium text-right">Devlt.</th>
-                  {/* Columna precio solo para jefe */}
                   {puedeEditar && <th className="px-3 py-3 font-medium text-right">Precio</th>}
                   {puedeEditar && !esFinalizado && <th className="px-3 py-3"></th>}
                 </tr>
@@ -346,7 +338,6 @@ export default function DetalleEvento() {
                       )}
                     </td>
 
-                    {/* Precio — solo jefe */}
                     {puedeEditar && (
                       <td className="px-3 py-2.5 text-right">
                         {!esFinalizado && editandoPrecio === d.id_detalle ? (
@@ -384,7 +375,6 @@ export default function DetalleEvento() {
                       </td>
                     )}
 
-                    {/* Eliminar artículo — solo jefe */}
                     {puedeEditar && !esFinalizado && (
                       <td className="px-3 py-2.5 text-right">
                         <button onClick={() => eliminarDetalle(d.id_detalle)}
@@ -417,6 +407,11 @@ export default function DetalleEvento() {
         </div>
       </div>
 
+      {/* Lista de cajón automática */}
+      <div className="mt-8">
+        <ListaCajon idEvento={Number(id)} soloLectura={!puedeEditar} />
+      </div>
+
       {/* Modal devolución */}
       <Modal abierto={!!modalDevolucion} onCerrar={() => setModalDevolucion(null)}
         titulo="Registrar devolución">
@@ -436,25 +431,14 @@ export default function DetalleEvento() {
         </form>
       </Modal>
 
-      {/* Modal cotización — solo jefe */}
-      <Modal abierto={modalCotizacion} onCerrar={() => setModalCotizacion(false)}
-        titulo="Cotización para cliente">
-        <form onSubmit={exportarCotizacion} className="flex flex-col gap-4">
-          <p className="text-sm text-ink-soft">
-            Se usan precios especiales si los hay, o el precio base del inventario.
-          </p>
-          <Campo etiqueta="Flete ($0 si no aplica)">
-            <Input type="number" min="0" step="0.01"
-              value={flete} onChange={e => setFlete(e.target.value)} />
-          </Campo>
-          <div className="flex justify-end gap-2">
-            <Boton variante="fantasma" type="button" onClick={() => setModalCotizacion(false)}>Cancelar</Boton>
-            <Boton variante="dorado" type="submit">Generar PDF</Boton>
-          </div>
-        </form>
-      </Modal>
+      {/* Modal cotización con extras — reemplaza el modal simple anterior */}
+      <ModalCotizacion
+        abierto={modalCotizacion}
+        onCerrar={() => setModalCotizacion(false)}
+        urlPdf={`/pdf/evento/${id}/cotizacion`}
+      />
 
-      {/* Modal finalizar — solo jefe */}
+      {/* Modal finalizar */}
       <Modal abierto={modalFinalizar} onCerrar={() => !finalizando && setModalFinalizar(false)}
         titulo="Finalizar evento">
         {resultadoFinal ? (

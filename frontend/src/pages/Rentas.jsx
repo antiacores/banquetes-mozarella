@@ -3,9 +3,8 @@ import { Plus, FileText, Download, ChevronDown, ChevronUp } from "lucide-react";
 import { listarArticulos, listarCategorias } from "../lib/api";
 import { api } from "../lib/api";
 import { Boton, Modal, Campo, Input, Select, TextArea, Badge } from "../components/ui";
+import ModalCotizacion from "../components/ModalCotizacion";
 import { abrirPdf } from "../lib/pdf";
-
-const API = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 const VACIO = {
   nombre_cliente: "",
@@ -25,22 +24,20 @@ const TONO_ESTADO = {
 };
 
 export default function Rentas() {
-  const [rentas, setRentas] = useState([]);
+  const [rentas, setRentas]       = useState([]);
   const [articulos, setArticulos] = useState([]);
   const [categorias, setCategorias] = useState([]);
-  const [cargando, setCargando] = useState(true);
-  const [error, setError] = useState(null);
+  const [cargando, setCargando]   = useState(true);
+  const [error, setError]         = useState(null);
 
-  // Formulario nueva renta
-  const [modalNueva, setModalNueva] = useState(false);
-  const [form, setForm] = useState(VACIO);
-  const [seleccion, setSeleccion] = useState({});
+  const [modalNueva, setModalNueva]           = useState(false);
+  const [form, setForm]                       = useState(VACIO);
+  const [seleccion, setSeleccion]             = useState({});
   const [categoriasAbiertas, setCategoriasAbiertas] = useState({});
-  const [guardando, setGuardando] = useState(false);
+  const [guardando, setGuardando]             = useState(false);
 
-  // Modal PDF
-  const [modalPdf, setModalPdf] = useState(null); // { id_renta }
-  const [fleteRenta, setFleteRenta] = useState(0);
+  // id_renta de la renta cuya cotización se quiere generar
+  const [rentaCotizacion, setRentaCotizacion] = useState(null);
 
   async function cargar() {
     try {
@@ -84,8 +81,8 @@ export default function Rentas() {
     return Object.entries(seleccion)
       .filter(([, v]) => v.cantidad > 0)
       .map(([id, v]) => ({
-        id_articulo: Number(id),
-        cantidad: v.cantidad,
+        id_articulo:    Number(id),
+        cantidad:       v.cantidad,
         precio_unitario: v.precio_unitario || 0,
       }));
   }
@@ -125,30 +122,15 @@ export default function Rentas() {
     }
   }
 
-  // ── PDF para trabajadores ────────────────────────────────────────────────
-  function exportarTrabajadores(idRenta) {
-  abrirPdf(`/pdf/renta/${idRenta}/trabajadores`);
-}
-
-  // ── PDF cotización cliente ───────────────────────────────────────────────
-  function abrirModalCotizacion(idRenta) {
-    setFleteRenta(0);
-    setModalPdf({ id_renta: idRenta });
-  }
-
-  function exportarCotizacion(e) {
-  e.preventDefault();
-  abrirPdf(`/pdf/renta/${modalPdf.id_renta}/cotizacion?flete=${fleteRenta}`);
-  setModalPdf(null);
-}
-
   const artsPorCategoria = categorias
     .map(cat => ({ ...cat, articulos: articulos.filter(a => a.id_categoria === cat.id_categoria) }))
     .filter(cat => cat.articulos.length > 0);
 
-  if (cargando) {
-    return <div className="min-h-screen flex items-center justify-center"><p className="text-ink-soft">Cargando...</p></div>;
-  }
+  if (cargando) return (
+    <div className="min-h-screen flex items-center justify-center">
+      <p className="text-ink-soft">Cargando...</p>
+    </div>
+  );
 
   return (
     <div className="px-6 py-8 max-w-6xl mx-auto">
@@ -186,11 +168,15 @@ export default function Rentas() {
                 <tr key={r.id_renta} className="border-b border-line last:border-0 hover:bg-mist/50">
                   <td className="px-4 py-3 font-medium">{r.nombre_cliente}</td>
                   <td className="px-4 py-3 text-ink-soft">
-                    {new Date(r.fecha_entrega + "T00:00:00").toLocaleDateString("es-MX", { day: "numeric", month: "short" })}
+                    {new Date(r.fecha_entrega + "T00:00:00").toLocaleDateString("es-MX", {
+                      day: "numeric", month: "short"
+                    })}
                   </td>
                   <td className="px-4 py-3 text-ink-soft">
                     {r.fecha_devolucion
-                      ? new Date(r.fecha_devolucion + "T00:00:00").toLocaleDateString("es-MX", { day: "numeric", month: "short" })
+                      ? new Date(r.fecha_devolucion + "T00:00:00").toLocaleDateString("es-MX", {
+                          day: "numeric", month: "short"
+                        })
                       : "—"}
                   </td>
                   <td className="px-4 py-3 text-right font-medium">
@@ -202,13 +188,13 @@ export default function Rentas() {
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-3 justify-end">
                       <button
-                        onClick={() => exportarTrabajadores(r.id_renta)}
+                        onClick={() => abrirPdf(`/pdf/renta/${r.id_renta}/trabajadores`)}
                         className="flex items-center gap-1 text-xs font-medium text-ink-soft hover:text-ink"
                       >
                         <Download size={13} /> Trabajadores
                       </button>
                       <button
-                        onClick={() => abrirModalCotizacion(r.id_renta)}
+                        onClick={() => setRentaCotizacion(r.id_renta)}
                         className="flex items-center gap-1 text-xs font-medium text-gold-deep hover:underline"
                       >
                         <FileText size={13} /> Cotización
@@ -288,14 +274,16 @@ export default function Rentas() {
                             <input type="number" min="0"
                               value={seleccion[a.id_articulo]?.cantidad || 0}
                               onChange={e => actualizarSeleccion(a.id_articulo, "cantidad", e.target.value)}
-                              className="w-14 text-center text-xs border border-line rounded py-1 focus:outline-none focus:ring-1 focus:ring-gold/40" />
+                              className="w-14 text-center text-xs border border-line rounded py-1
+                                         focus:outline-none focus:ring-1 focus:ring-gold/40" />
                           </div>
                           <div className="flex items-center gap-1 shrink-0">
                             <span className="text-xs text-ink-soft">$</span>
                             <input type="number" min="0" step="0.01"
                               value={seleccion[a.id_articulo]?.precio_unitario || 0}
                               onChange={e => actualizarSeleccion(a.id_articulo, "precio_unitario", e.target.value)}
-                              className="w-20 text-center text-xs border border-line rounded py-1 focus:outline-none focus:ring-1 focus:ring-gold/40" />
+                              className="w-20 text-center text-xs border border-line rounded py-1
+                                         focus:outline-none focus:ring-1 focus:ring-gold/40" />
                           </div>
                         </div>
                       ))}
@@ -315,23 +303,12 @@ export default function Rentas() {
         </form>
       </Modal>
 
-      {/* Modal cotización PDF */}
-      <Modal abierto={!!modalPdf} onCerrar={() => setModalPdf(null)} titulo="Cotización para cliente">
-        <form onSubmit={exportarCotizacion} className="flex flex-col gap-4">
-          <p className="text-sm text-ink-soft">
-            Los precios se toman de lo que capturaste al crear la renta.
-            Si cambiaron, puedes crear una renta nueva con los precios actualizados.
-          </p>
-          <Campo etiqueta="Flete ($0 si no aplica)">
-            <Input type="number" min="0" step="0.01"
-              value={fleteRenta} onChange={e => setFleteRenta(e.target.value)} />
-          </Campo>
-          <div className="flex justify-end gap-2">
-            <Boton variante="fantasma" type="button" onClick={() => setModalPdf(null)}>Cancelar</Boton>
-            <Boton variante="dorado" type="submit">Generar PDF</Boton>
-          </div>
-        </form>
-      </Modal>
+      {/* Modal cotización con extras — reemplaza el modal simple anterior */}
+      <ModalCotizacion
+        abierto={!!rentaCotizacion}
+        onCerrar={() => setRentaCotizacion(null)}
+        urlPdf={`/pdf/renta/${rentaCotizacion}/cotizacion`}
+      />
     </div>
   );
 }
