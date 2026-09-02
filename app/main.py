@@ -15,6 +15,7 @@ from app.routers import (
 )
 from app.routers.auth import obtener_usuario_actual, solo_jefe
 from app.routers.cajon import router as router_cajon
+from app.routers import dashboard
 
 app = FastAPI(
     title="API Eventos Mozzarella",
@@ -45,6 +46,7 @@ app.include_router(router_cajon,            dependencies=[Depends(obtener_usuari
 # ── Solo jefe ───────────────────────────────────────────────────────────
 app.include_router(rentas.router,           dependencies=[Depends(solo_jefe)])
 app.include_router(clientes.router,         dependencies=[Depends(solo_jefe)])
+app.include_router(dashboard.router, dependencies=[Depends(solo_jefe)])
 
 
 @app.get("/")

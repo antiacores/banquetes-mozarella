@@ -40,12 +40,13 @@ export default function Eventos() {
 
   async function cargar() {
     try {
-      const [data, clientesData] = await Promise.all([
-        listarEventos(),
-        api.get("/clientes/").then(r => r.data),
-      ]);
+      const data = await listarEventos();
       setEventos(data);
-      setClientes(clientesData);
+      // Clientes solo si es jefe
+      if (puedeEditar) {
+        const clientesData = await api.get("/clientes/").then(r => r.data);
+        setClientes(clientesData);
+      }
     } catch {
       setError("No se pudo conectar con el servidor.");
     } finally {
