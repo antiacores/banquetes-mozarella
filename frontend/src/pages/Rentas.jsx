@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
-import { Plus, FileText, Download, ChevronDown, ChevronUp } from "lucide-react";
+import { Plus, FileText, Download, Search } from "lucide-react";
 import { listarArticulos, listarCategorias } from "../lib/api";
 import { api } from "../lib/api";
 import { Boton, Modal, Campo, Input, Select, TextArea, Badge } from "../components/ui";
 import ModalCotizacion from "../components/ModalCotizacion";
 import { abrirPdf } from "../lib/pdf";
+import { coincideFlexible } from "../lib/busqueda";
 
 const VACIO = {
   nombre_cliente: "",
@@ -30,12 +31,15 @@ export default function Rentas() {
   const [cargando, setCargando]     = useState(true);
   const [error, setError]           = useState(null);
 
-  const [modalNueva, setModalNueva]                 = useState(false);
-  const [form, setForm]                             = useState(VACIO);
-  const [seleccion, setSeleccion]                   = useState({});
-  const [categoriasAbiertas, setCategoriasAbiertas] = useState({});
-  const [guardando, setGuardando]                   = useState(false);
-  const [paso, setPaso]                             = useState(1); // 1=datos, 2=artículos
+  const [modalNueva, setModalNueva]   = useState(false);
+  const [form, setForm]               = useState(VACIO);
+  const [seleccion, setSeleccion]     = useState({});
+  const [guardando, setGuardando]     = useState(false);
+  const [paso, setPaso]               = useState(1);
+
+  // Filtros para la lista de artículos
+  const [busqueda, setBusqueda]           = useState("");
+  const [filtroCategoria, setFiltroCategoria] = useState("");
 
   const [rentaCotizacion, setRentaCotizacion] = useState(null);
 
@@ -49,9 +53,6 @@ export default function Rentas() {
       setRentas(r);
       setArticulos(a);
       setCategorias(c);
-      const abiertas = {};
-      c.forEach(cat => { abiertas[cat.id_categoria] = true; });
-      setCategoriasAbiertas(abiertas);
     } catch {
       setError("No se pudo conectar con el servidor.");
     } finally {
@@ -60,10 +61,6 @@ export default function Rentas() {
   }
 
   useEffect(() => { cargar(); }, []);
-
-  function toggleCategoria(id) {
-    setCategoriasAbiertas(prev => ({ ...prev, [id]: !prev[id] }));
-  }
 
   function actualizarSeleccion(idArticulo, campo, valor) {
     setSeleccion(prev => ({
@@ -96,12 +93,13 @@ export default function Rentas() {
   function abrirModal() {
     setForm(VACIO);
     setSeleccion({});
+    setBusqueda("");
+    setFiltroCategoria("");
     setPaso(1);
     setModalNueva(true);
   }
 
-  async function guardar(e) {
-    e.preventDefault();
+  async function guardar() {
     const arts = articulosSeleccionados();
     if (arts.length === 0) {
       alert("Selecciona al menos un artículo para la renta.");
@@ -123,9 +121,14 @@ export default function Rentas() {
     }
   }
 
-  const artsPorCategoria = categorias
-    .map(cat => ({ ...cat, articulos: articulos.filter(a => a.id_categoria === cat.id_categoria) }))
-    .filter(cat => cat.articulos.length > 0);
+  // Artículos filtrados por búsqueda y categoría
+  const articulosFiltrados = articulos.filter(a => {
+    const coincide  = coincideFlexible(a.nombre, busqueda);
+    const categoria = !filtroCategoria || a.id_categoria === Number(filtroCategoria);
+    return coincide && categoria;
+  });
+
+  const seleccionados = articulosSeleccionados();
 
   if (cargando) return (
     <div className="min-h-screen flex items-center justify-center">
@@ -161,7 +164,7 @@ export default function Rentas() {
                 <th className="px-4 py-3 font-medium">Devolución</th>
                 <th className="px-4 py-3 font-medium text-right">Total</th>
                 <th className="px-4 py-3 font-medium">Estado</th>
-                <th className="px-4 py-3 font-medium"></th>
+                <th className="px-4 py-3"></th>
               </tr>
             </thead>
             <tbody>
@@ -188,16 +191,12 @@ export default function Rentas() {
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-3 justify-end">
-                      <button
-                        onClick={() => abrirPdf(`/pdf/renta/${r.id_renta}/trabajadores`)}
-                        className="flex items-center gap-1 text-xs font-medium text-ink-soft hover:text-ink"
-                      >
+                      <button onClick={() => abrirPdf(`/pdf/renta/${r.id_renta}/trabajadores`)}
+                        className="flex items-center gap-1 text-xs font-medium text-ink-soft hover:text-ink">
                         <Download size={13} /> Trabajadores
                       </button>
-                      <button
-                        onClick={() => setRentaCotizacion(r.id_renta)}
-                        className="flex items-center gap-1 text-xs font-medium text-gold-deep hover:underline"
-                      >
+                      <button onClick={() => setRentaCotizacion(r.id_renta)}
+                        className="flex items-center gap-1 text-xs font-medium text-gold-deep hover:underline">
                         <FileText size={13} /> Cotización
                       </button>
                     </div>
@@ -209,149 +208,173 @@ export default function Rentas() {
         )}
       </div>
 
-      {/* Modal nueva renta — dividido en 2 pasos para evitar problemas de overflow */}
-      <Modal abierto={modalNueva} onCerrar={() => setModalNueva(false)}
-        titulo={paso === 1 ? "Nueva renta — Datos" : "Nueva renta — Artículos"}>
-
-        {/* Paso 1: datos del cliente */}
-        {paso === 1 && (
-          <div className="flex flex-col gap-4">
-            <Campo etiqueta="Nombre del cliente">
-              <Input required value={form.nombre_cliente}
-                onChange={e => setForm({ ...form, nombre_cliente: e.target.value })} />
+      {/* Modal nueva renta — Paso 1: datos */}
+      <Modal abierto={modalNueva && paso === 1} onCerrar={() => setModalNueva(false)} titulo="Nueva renta">
+        <div className="flex flex-col gap-4">
+          <Campo etiqueta="Nombre del cliente">
+            <Input required value={form.nombre_cliente}
+              onChange={e => setForm({ ...form, nombre_cliente: e.target.value })} />
+          </Campo>
+          <div className="grid grid-cols-2 gap-3">
+            <Campo etiqueta="Teléfono">
+              <Input value={form.telefono}
+                onChange={e => setForm({ ...form, telefono: e.target.value })} />
             </Campo>
-            <div className="grid grid-cols-2 gap-3">
-              <Campo etiqueta="Teléfono">
-                <Input value={form.telefono}
-                  onChange={e => setForm({ ...form, telefono: e.target.value })} />
-              </Campo>
-              <Campo etiqueta="Estado">
-                <Select value={form.estado} onChange={e => setForm({ ...form, estado: e.target.value })}>
-                  <option value="cotizacion">Cotización</option>
-                  <option value="confirmada">Confirmada</option>
-                  <option value="entregada">Entregada</option>
-                  <option value="devuelta">Devuelta</option>
-                  <option value="cancelada">Cancelada</option>
-                </Select>
-              </Campo>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <Campo etiqueta="Fecha de entrega">
-                <Input type="date" required value={form.fecha_entrega}
-                  onChange={e => setForm({ ...form, fecha_entrega: e.target.value })} />
-              </Campo>
-              <Campo etiqueta="Fecha de devolución">
-                <Input type="date" value={form.fecha_devolucion}
-                  onChange={e => setForm({ ...form, fecha_devolucion: e.target.value })} />
-              </Campo>
-            </div>
-            <Campo etiqueta="Notas">
-              <TextArea value={form.notas}
-                onChange={e => setForm({ ...form, notas: e.target.value })} />
+            <Campo etiqueta="Estado">
+              <Select value={form.estado} onChange={e => setForm({ ...form, estado: e.target.value })}>
+                <option value="cotizacion">Cotización</option>
+                <option value="confirmada">Confirmada</option>
+                <option value="entregada">Entregada</option>
+                <option value="devuelta">Devuelta</option>
+                <option value="cancelada">Cancelada</option>
+              </Select>
             </Campo>
-            <div className="flex justify-end gap-2 pt-2">
-              <Boton variante="fantasma" type="button" onClick={() => setModalNueva(false)}>Cancelar</Boton>
-              <Boton variante="dorado" type="button"
-                onClick={() => {
-                  if (!form.nombre_cliente || !form.fecha_entrega) {
-                    alert("Nombre del cliente y fecha de entrega son obligatorios.");
-                    return;
-                  }
-                  setPaso(2);
-                }}>
-                Siguiente →
-              </Boton>
-            </div>
           </div>
-        )}
+          <div className="grid grid-cols-2 gap-3">
+            <Campo etiqueta="Fecha de entrega">
+              <Input type="date" required value={form.fecha_entrega}
+                onChange={e => setForm({ ...form, fecha_entrega: e.target.value })} />
+            </Campo>
+            <Campo etiqueta="Fecha de devolución">
+              <Input type="date" value={form.fecha_devolucion}
+                onChange={e => setForm({ ...form, fecha_devolucion: e.target.value })} />
+            </Campo>
+          </div>
+          <Campo etiqueta="Notas">
+            <TextArea value={form.notas}
+              onChange={e => setForm({ ...form, notas: e.target.value })} />
+          </Campo>
+          <div className="flex justify-end gap-2 pt-2">
+            <Boton variante="fantasma" onClick={() => setModalNueva(false)}>Cancelar</Boton>
+            <Boton variante="dorado" onClick={() => {
+              if (!form.nombre_cliente || !form.fecha_entrega) {
+                alert("Nombre del cliente y fecha de entrega son obligatorios.");
+                return;
+              }
+              setPaso(2);
+            }}>
+              Siguiente →
+            </Boton>
+          </div>
+        </div>
+      </Modal>
 
-        {/* Paso 2: selección de artículos */}
-        {paso === 2 && (
-          <div className="flex flex-col gap-3">
-            <div className="flex items-center justify-between">
-              <p className="text-xs font-medium text-ink-soft uppercase tracking-wide">
-                Artículos a rentar
-              </p>
-              {articulosSeleccionados().length > 0 && (
-                <span className="text-xs text-gold-deep font-medium">
-                  Total: ${totalCotizacion().toLocaleString("es-MX", { minimumFractionDigits: 2 })}
-                </span>
+      {/* Paso 2: selección de artículos — pantalla completa */}
+      {modalNueva && paso === 2 && (
+        <div className="fixed inset-0 z-50 bg-ink/40 flex items-center justify-center p-4">
+          <div className="bg-paper rounded-2xl w-full max-w-3xl flex flex-col"
+               style={{ maxHeight: "90vh" }}>
+
+            {/* Encabezado */}
+            <div className="px-6 pt-6 pb-4 border-b border-line shrink-0">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="font-display text-lg font-semibold">Seleccionar artículos</h2>
+                {seleccionados.length > 0 && (
+                  <span className="text-sm font-medium text-gold-deep">
+                    {seleccionados.length} artículo{seleccionados.length !== 1 ? "s" : ""} ·
+                    ${totalCotizacion().toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+                  </span>
+                )}
+              </div>
+
+              {/* Filtros */}
+              <div className="flex gap-2 flex-wrap">
+                <div className="relative flex-1 min-w-[180px]">
+                  <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-soft" />
+                  <input
+                    value={busqueda}
+                    onChange={e => setBusqueda(e.target.value)}
+                    placeholder="Buscar artículo..."
+                    className="w-full pl-8 pr-3 py-2 rounded-lg border border-line bg-paper text-sm
+                               focus:outline-none focus:ring-2 focus:ring-gold/40"
+                  />
+                </div>
+                {/* Botones de categoría */}
+                <div className="flex gap-1.5 flex-wrap">
+                  <button
+                    onClick={() => setFiltroCategoria("")}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                      filtroCategoria === ""
+                        ? "bg-ink text-white"
+                        : "bg-mist text-ink-soft hover:bg-paper border border-line"
+                    }`}>
+                    Todos
+                  </button>
+                  {categorias.map(cat => (
+                    <button key={cat.id_categoria}
+                      onClick={() => setFiltroCategoria(
+                        filtroCategoria === String(cat.id_categoria) ? "" : String(cat.id_categoria)
+                      )}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                        filtroCategoria === String(cat.id_categoria)
+                          ? "bg-gold-deep text-white"
+                          : "bg-mist text-ink-soft hover:bg-paper border border-line"
+                      }`}>
+                      {cat.nombre}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Lista de artículos con scroll */}
+            <div className="overflow-y-auto flex-1 px-6 py-3">
+              {articulosFiltrados.length === 0 ? (
+                <p className="text-center text-ink-soft text-sm py-8">No se encontraron artículos.</p>
+              ) : (
+                <div className="flex flex-col gap-0 rounded-xl border border-line overflow-hidden">
+                  {articulosFiltrados.map((a, idx) => {
+                    const cant   = seleccion[a.id_articulo]?.cantidad || 0;
+                    const precio = seleccion[a.id_articulo]?.precio_unitario || 0;
+                    const cat    = categorias.find(c => c.id_categoria === a.id_categoria);
+                    return (
+                      <div key={a.id_articulo}
+                        className={`flex items-center gap-3 px-4 py-2.5 border-b border-line last:border-0
+                                    ${cant > 0 ? "bg-gold-pale/40" : idx % 2 === 0 ? "bg-paper" : "bg-mist/30"}`}>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate">{a.nombre}</p>
+                          <p className="text-xs text-ink-soft">{cat?.nombre} · {a.cantidad_disponible} disp.</p>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <span className="text-xs text-ink-soft">Cant.</span>
+                          <input type="number" min="0"
+                            value={cant || ""}
+                            placeholder="0"
+                            onChange={e => actualizarSeleccion(a.id_articulo, "cantidad", e.target.value)}
+                            className="w-14 text-center text-sm border border-line rounded-lg py-1
+                                       focus:outline-none focus:ring-2 focus:ring-gold/40
+                                       bg-paper" />
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <span className="text-xs text-ink-soft">$</span>
+                          <input type="number" min="0" step="0.01"
+                            value={precio || ""}
+                            placeholder="0"
+                            onChange={e => actualizarSeleccion(a.id_articulo, "precio_unitario", e.target.value)}
+                            className="w-20 text-center text-sm border border-line rounded-lg py-1
+                                       focus:outline-none focus:ring-2 focus:ring-gold/40
+                                       bg-paper" />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               )}
             </div>
 
-            {/* Lista de categorías con scroll propio */}
-            <div className="flex flex-col gap-2 overflow-y-auto" style={{ maxHeight: "55vh" }}>
-              {artsPorCategoria.map(cat => (
-                <div key={cat.id_categoria} className="rounded-lg border border-line overflow-hidden">
-                  <button type="button" onClick={() => toggleCategoria(cat.id_categoria)}
-                    className="w-full flex items-center justify-between px-3 py-2.5 text-xs
-                               font-medium text-ink-soft bg-mist hover:bg-mist/70 transition-colors">
-                    <span className="uppercase tracking-wide">{cat.nombre}</span>
-                    <div className="flex items-center gap-2">
-                      {/* Contador de artículos seleccionados en esta categoría */}
-                      {cat.articulos.some(a => (seleccion[a.id_articulo]?.cantidad || 0) > 0) && (
-                        <span className="bg-gold-deep text-white text-[10px] font-bold
-                                         rounded-full px-1.5 py-0.5">
-                          {cat.articulos.filter(a => (seleccion[a.id_articulo]?.cantidad || 0) > 0).length}
-                        </span>
-                      )}
-                      {categoriasAbiertas[cat.id_categoria]
-                        ? <ChevronUp size={13} />
-                        : <ChevronDown size={13} />}
-                    </div>
-                  </button>
-
-                  {categoriasAbiertas[cat.id_categoria] && (
-                    <div className="divide-y divide-line">
-                      {cat.articulos.map(a => {
-                        const cant = seleccion[a.id_articulo]?.cantidad || 0;
-                        const precio = seleccion[a.id_articulo]?.precio_unitario || 0;
-                        return (
-                          <div key={a.id_articulo}
-                            className={`flex items-center gap-2 px-3 py-2 ${cant > 0 ? "bg-gold-pale/30" : ""}`}>
-                            <span className="text-sm flex-1 truncate" title={a.nombre}>{a.nombre}</span>
-                            <span className="text-xs text-ink-soft shrink-0 w-16 text-right">
-                              {a.cantidad_disponible} disp.
-                            </span>
-                            <div className="flex items-center gap-1 shrink-0">
-                              <span className="text-xs text-ink-soft">Cant.</span>
-                              <input type="number" min="0"
-                                value={cant || ""}
-                                placeholder="0"
-                                onChange={e => actualizarSeleccion(a.id_articulo, "cantidad", e.target.value)}
-                                className="w-14 text-center text-xs border border-line rounded py-1
-                                           focus:outline-none focus:ring-1 focus:ring-gold/40" />
-                            </div>
-                            <div className="flex items-center gap-1 shrink-0">
-                              <span className="text-xs text-ink-soft">$</span>
-                              <input type="number" min="0" step="0.01"
-                                value={precio || ""}
-                                placeholder="0"
-                                onChange={e => actualizarSeleccion(a.id_articulo, "precio_unitario", e.target.value)}
-                                className="w-20 text-center text-xs border border-line rounded py-1
-                                           focus:outline-none focus:ring-1 focus:ring-gold/40" />
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-
-            <div className="flex justify-between gap-2 pt-2 border-t border-line">
-              <Boton variante="fantasma" type="button" onClick={() => setPaso(1)}>← Atrás</Boton>
+            {/* Pie */}
+            <div className="px-6 py-4 border-t border-line flex justify-between items-center shrink-0">
+              <Boton variante="fantasma" onClick={() => setPaso(1)}>← Atrás</Boton>
               <div className="flex gap-2">
-                <Boton variante="fantasma" type="button" onClick={() => setModalNueva(false)}>Cancelar</Boton>
-                <Boton variante="dorado" type="button" onClick={guardar} disabled={guardando}>
+                <Boton variante="fantasma" onClick={() => setModalNueva(false)}>Cancelar</Boton>
+                <Boton variante="dorado" onClick={guardar} disabled={guardando}>
                   {guardando ? "Guardando..." : "Guardar renta"}
                 </Boton>
               </div>
             </div>
           </div>
-        )}
-      </Modal>
+        </div>
+      )}
 
       <ModalCotizacion
         abierto={!!rentaCotizacion}
