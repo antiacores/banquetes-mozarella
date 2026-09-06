@@ -24,19 +24,19 @@ const TONO_ESTADO = {
 };
 
 export default function Rentas() {
-  const [rentas, setRentas]       = useState([]);
-  const [articulos, setArticulos] = useState([]);
+  const [rentas, setRentas]         = useState([]);
+  const [articulos, setArticulos]   = useState([]);
   const [categorias, setCategorias] = useState([]);
-  const [cargando, setCargando]   = useState(true);
-  const [error, setError]         = useState(null);
+  const [cargando, setCargando]     = useState(true);
+  const [error, setError]           = useState(null);
 
-  const [modalNueva, setModalNueva]           = useState(false);
-  const [form, setForm]                       = useState(VACIO);
-  const [seleccion, setSeleccion]             = useState({});
+  const [modalNueva, setModalNueva]                 = useState(false);
+  const [form, setForm]                             = useState(VACIO);
+  const [seleccion, setSeleccion]                   = useState({});
   const [categoriasAbiertas, setCategoriasAbiertas] = useState({});
-  const [guardando, setGuardando]             = useState(false);
+  const [guardando, setGuardando]                   = useState(false);
+  const [paso, setPaso]                             = useState(1); // 1=datos, 2=artículos
 
-  // id_renta de la renta cuya cotización se quiere generar
   const [rentaCotizacion, setRentaCotizacion] = useState(null);
 
   async function cargar() {
@@ -81,8 +81,8 @@ export default function Rentas() {
     return Object.entries(seleccion)
       .filter(([, v]) => v.cantidad > 0)
       .map(([id, v]) => ({
-        id_articulo:    Number(id),
-        cantidad:       v.cantidad,
+        id_articulo:     Number(id),
+        cantidad:        v.cantidad,
         precio_unitario: v.precio_unitario || 0,
       }));
   }
@@ -96,6 +96,7 @@ export default function Rentas() {
   function abrirModal() {
     setForm(VACIO);
     setSeleccion({});
+    setPaso(1);
     setModalNueva(true);
   }
 
@@ -208,102 +209,150 @@ export default function Rentas() {
         )}
       </div>
 
-      {/* Modal nueva renta */}
-      <Modal abierto={modalNueva} onCerrar={() => setModalNueva(false)} titulo="Nueva renta">
-        <form onSubmit={guardar} className="flex flex-col gap-4">
-          <Campo etiqueta="Nombre del cliente">
-            <Input required value={form.nombre_cliente}
-              onChange={e => setForm({ ...form, nombre_cliente: e.target.value })} />
-          </Campo>
-          <div className="grid grid-cols-2 gap-3">
-            <Campo etiqueta="Teléfono">
-              <Input value={form.telefono}
-                onChange={e => setForm({ ...form, telefono: e.target.value })} />
-            </Campo>
-            <Campo etiqueta="Estado">
-              <Select value={form.estado} onChange={e => setForm({ ...form, estado: e.target.value })}>
-                <option value="cotizacion">Cotización</option>
-                <option value="confirmada">Confirmada</option>
-                <option value="entregada">Entregada</option>
-                <option value="devuelta">Devuelta</option>
-                <option value="cancelada">Cancelada</option>
-              </Select>
-            </Campo>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <Campo etiqueta="Fecha de entrega">
-              <Input type="date" required value={form.fecha_entrega}
-                onChange={e => setForm({ ...form, fecha_entrega: e.target.value })} />
-            </Campo>
-            <Campo etiqueta="Fecha de devolución">
-              <Input type="date" value={form.fecha_devolucion}
-                onChange={e => setForm({ ...form, fecha_devolucion: e.target.value })} />
-            </Campo>
-          </div>
-          <Campo etiqueta="Notas">
-            <TextArea value={form.notas}
-              onChange={e => setForm({ ...form, notas: e.target.value })} />
-          </Campo>
+      {/* Modal nueva renta — dividido en 2 pasos para evitar problemas de overflow */}
+      <Modal abierto={modalNueva} onCerrar={() => setModalNueva(false)}
+        titulo={paso === 1 ? "Nueva renta — Datos" : "Nueva renta — Artículos"}>
 
-          {/* Checklist de artículos */}
-          <div>
-            <p className="text-xs font-medium text-ink-soft mb-2">
-              ARTÍCULOS A RENTAR
+        {/* Paso 1: datos del cliente */}
+        {paso === 1 && (
+          <div className="flex flex-col gap-4">
+            <Campo etiqueta="Nombre del cliente">
+              <Input required value={form.nombre_cliente}
+                onChange={e => setForm({ ...form, nombre_cliente: e.target.value })} />
+            </Campo>
+            <div className="grid grid-cols-2 gap-3">
+              <Campo etiqueta="Teléfono">
+                <Input value={form.telefono}
+                  onChange={e => setForm({ ...form, telefono: e.target.value })} />
+              </Campo>
+              <Campo etiqueta="Estado">
+                <Select value={form.estado} onChange={e => setForm({ ...form, estado: e.target.value })}>
+                  <option value="cotizacion">Cotización</option>
+                  <option value="confirmada">Confirmada</option>
+                  <option value="entregada">Entregada</option>
+                  <option value="devuelta">Devuelta</option>
+                  <option value="cancelada">Cancelada</option>
+                </Select>
+              </Campo>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Campo etiqueta="Fecha de entrega">
+                <Input type="date" required value={form.fecha_entrega}
+                  onChange={e => setForm({ ...form, fecha_entrega: e.target.value })} />
+              </Campo>
+              <Campo etiqueta="Fecha de devolución">
+                <Input type="date" value={form.fecha_devolucion}
+                  onChange={e => setForm({ ...form, fecha_devolucion: e.target.value })} />
+              </Campo>
+            </div>
+            <Campo etiqueta="Notas">
+              <TextArea value={form.notas}
+                onChange={e => setForm({ ...form, notas: e.target.value })} />
+            </Campo>
+            <div className="flex justify-end gap-2 pt-2">
+              <Boton variante="fantasma" type="button" onClick={() => setModalNueva(false)}>Cancelar</Boton>
+              <Boton variante="dorado" type="button"
+                onClick={() => {
+                  if (!form.nombre_cliente || !form.fecha_entrega) {
+                    alert("Nombre del cliente y fecha de entrega son obligatorios.");
+                    return;
+                  }
+                  setPaso(2);
+                }}>
+                Siguiente →
+              </Boton>
+            </div>
+          </div>
+        )}
+
+        {/* Paso 2: selección de artículos */}
+        {paso === 2 && (
+          <div className="flex flex-col gap-3">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-medium text-ink-soft uppercase tracking-wide">
+                Artículos a rentar
+              </p>
               {articulosSeleccionados().length > 0 && (
-                <span className="ml-2 text-gold-deep">
-                  · Total: ${totalCotizacion().toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+                <span className="text-xs text-gold-deep font-medium">
+                  Total: ${totalCotizacion().toLocaleString("es-MX", { minimumFractionDigits: 2 })}
                 </span>
               )}
-            </p>
-            <div className="flex flex-col gap-2 max-h-72 overflow-y-auto pr-1">
+            </div>
+
+            {/* Lista de categorías con scroll propio */}
+            <div className="flex flex-col gap-2 overflow-y-auto" style={{ maxHeight: "55vh" }}>
               {artsPorCategoria.map(cat => (
                 <div key={cat.id_categoria} className="rounded-lg border border-line overflow-hidden">
                   <button type="button" onClick={() => toggleCategoria(cat.id_categoria)}
-                    className="w-full flex items-center justify-between px-3 py-2 text-xs font-medium text-ink-soft bg-mist hover:bg-mist/70">
+                    className="w-full flex items-center justify-between px-3 py-2.5 text-xs
+                               font-medium text-ink-soft bg-mist hover:bg-mist/70 transition-colors">
                     <span className="uppercase tracking-wide">{cat.nombre}</span>
-                    {categoriasAbiertas[cat.id_categoria] ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                    <div className="flex items-center gap-2">
+                      {/* Contador de artículos seleccionados en esta categoría */}
+                      {cat.articulos.some(a => (seleccion[a.id_articulo]?.cantidad || 0) > 0) && (
+                        <span className="bg-gold-deep text-white text-[10px] font-bold
+                                         rounded-full px-1.5 py-0.5">
+                          {cat.articulos.filter(a => (seleccion[a.id_articulo]?.cantidad || 0) > 0).length}
+                        </span>
+                      )}
+                      {categoriasAbiertas[cat.id_categoria]
+                        ? <ChevronUp size={13} />
+                        : <ChevronDown size={13} />}
+                    </div>
                   </button>
+
                   {categoriasAbiertas[cat.id_categoria] && (
-                    <div>
-                      {cat.articulos.map(a => (
-                        <div key={a.id_articulo} className="flex items-center gap-2 px-3 py-2 border-t border-line">
-                          <span className="text-sm flex-1 truncate">{a.nombre}</span>
-                          <span className="text-xs text-ink-soft shrink-0">{a.cantidad_disponible} disp.</span>
-                          <div className="flex items-center gap-1 shrink-0">
-                            <span className="text-xs text-ink-soft">Cant.</span>
-                            <input type="number" min="0"
-                              value={seleccion[a.id_articulo]?.cantidad || 0}
-                              onChange={e => actualizarSeleccion(a.id_articulo, "cantidad", e.target.value)}
-                              className="w-14 text-center text-xs border border-line rounded py-1
-                                         focus:outline-none focus:ring-1 focus:ring-gold/40" />
+                    <div className="divide-y divide-line">
+                      {cat.articulos.map(a => {
+                        const cant = seleccion[a.id_articulo]?.cantidad || 0;
+                        const precio = seleccion[a.id_articulo]?.precio_unitario || 0;
+                        return (
+                          <div key={a.id_articulo}
+                            className={`flex items-center gap-2 px-3 py-2 ${cant > 0 ? "bg-gold-pale/30" : ""}`}>
+                            <span className="text-sm flex-1 truncate" title={a.nombre}>{a.nombre}</span>
+                            <span className="text-xs text-ink-soft shrink-0 w-16 text-right">
+                              {a.cantidad_disponible} disp.
+                            </span>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <span className="text-xs text-ink-soft">Cant.</span>
+                              <input type="number" min="0"
+                                value={cant || ""}
+                                placeholder="0"
+                                onChange={e => actualizarSeleccion(a.id_articulo, "cantidad", e.target.value)}
+                                className="w-14 text-center text-xs border border-line rounded py-1
+                                           focus:outline-none focus:ring-1 focus:ring-gold/40" />
+                            </div>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <span className="text-xs text-ink-soft">$</span>
+                              <input type="number" min="0" step="0.01"
+                                value={precio || ""}
+                                placeholder="0"
+                                onChange={e => actualizarSeleccion(a.id_articulo, "precio_unitario", e.target.value)}
+                                className="w-20 text-center text-xs border border-line rounded py-1
+                                           focus:outline-none focus:ring-1 focus:ring-gold/40" />
+                            </div>
                           </div>
-                          <div className="flex items-center gap-1 shrink-0">
-                            <span className="text-xs text-ink-soft">$</span>
-                            <input type="number" min="0" step="0.01"
-                              value={seleccion[a.id_articulo]?.precio_unitario || 0}
-                              onChange={e => actualizarSeleccion(a.id_articulo, "precio_unitario", e.target.value)}
-                              className="w-20 text-center text-xs border border-line rounded py-1
-                                         focus:outline-none focus:ring-1 focus:ring-gold/40" />
-                          </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>
               ))}
             </div>
-          </div>
 
-          <div className="flex justify-end gap-2 pt-2">
-            <Boton variante="fantasma" type="button" onClick={() => setModalNueva(false)}>Cancelar</Boton>
-            <Boton variante="dorado" type="submit" disabled={guardando}>
-              {guardando ? "Guardando..." : "Guardar renta"}
-            </Boton>
+            <div className="flex justify-between gap-2 pt-2 border-t border-line">
+              <Boton variante="fantasma" type="button" onClick={() => setPaso(1)}>← Atrás</Boton>
+              <div className="flex gap-2">
+                <Boton variante="fantasma" type="button" onClick={() => setModalNueva(false)}>Cancelar</Boton>
+                <Boton variante="dorado" type="button" onClick={guardar} disabled={guardando}>
+                  {guardando ? "Guardando..." : "Guardar renta"}
+                </Boton>
+              </div>
+            </div>
           </div>
-        </form>
+        )}
       </Modal>
 
-      {/* Modal cotización con extras — reemplaza el modal simple anterior */}
       <ModalCotizacion
         abierto={!!rentaCotizacion}
         onCerrar={() => setRentaCotizacion(null)}
