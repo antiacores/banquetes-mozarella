@@ -17,7 +17,7 @@ const TONO_ESTADO = {
   cotizacion: "neutro", finalizado: "neutro", cancelado: "alerta",
 };
 
-const ESTADOS = ["cotizacion", "pendiente", "confirmado", "cancelado"];
+const ESTADOS = ["cotizacion", "pendiente", "confirmado", "finalizado", "cancelado"];
 
 export default function Eventos() {
   const { usuario } = useAuth();
@@ -129,7 +129,7 @@ export default function Eventos() {
           </div>
         </button>
 
-        {puedeEditar && !esFinalizado ? (
+        {puedeEditar ? (
           <button
             onClick={() => { setEditandoEstado(ev); setNuevoEstado(ev.estado); }}
             className="shrink-0 group/estado" title="Cambiar estado"
