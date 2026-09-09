@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plus, FileText, Download, Search } from "lucide-react";
+import { Plus, FileText, Download, Search, Pencil } from "lucide-react";
 import { listarArticulos, listarCategorias } from "../lib/api";
 import { api } from "../lib/api";
 import { Boton, Modal, Campo, Input, Select, TextArea, Badge } from "../components/ui";
@@ -24,6 +24,8 @@ const TONO_ESTADO = {
   cancelada: "alerta",
 };
 
+const ESTADOS = ["cotizacion", "confirmada", "entregada", "devuelta", "cancelada"];
+
 export default function Rentas() {
   const [rentas, setRentas]         = useState([]);
   const [articulos, setArticulos]   = useState([]);
@@ -31,15 +33,17 @@ export default function Rentas() {
   const [cargando, setCargando]     = useState(true);
   const [error, setError]           = useState(null);
 
-  const [modalNueva, setModalNueva]   = useState(false);
-  const [form, setForm]               = useState(VACIO);
-  const [seleccion, setSeleccion]     = useState({});
-  const [guardando, setGuardando]     = useState(false);
-  const [paso, setPaso]               = useState(1);
+  const [modalNueva, setModalNueva] = useState(false);
+  const [form, setForm]             = useState(VACIO);
+  const [seleccion, setSeleccion]   = useState({});
+  const [guardando, setGuardando]   = useState(false);
+  const [paso, setPaso]             = useState(1);
 
-  // Filtros para la lista de artículos
-  const [busqueda, setBusqueda]           = useState("");
+  const [busqueda, setBusqueda]               = useState("");
   const [filtroCategoria, setFiltroCategoria] = useState("");
+
+  const [editandoEstado, setEditandoEstado] = useState(null);
+  const [nuevoEstado, setNuevoEstado]       = useState("");
 
   const [rentaCotizacion, setRentaCotizacion] = useState(null);
 
@@ -61,6 +65,17 @@ export default function Rentas() {
   }
 
   useEffect(() => { cargar(); }, []);
+
+  async function guardarEstado(e) {
+    e.preventDefault();
+    try {
+      await api.put(`/rentas/${editandoEstado.id_renta}`, { estado: nuevoEstado });
+      setEditandoEstado(null);
+      await cargar();
+    } catch (err) {
+      alert(err?.response?.data?.detail || "Error al actualizar.");
+    }
+  }
 
   function actualizarSeleccion(idArticulo, campo, valor) {
     setSeleccion(prev => ({
@@ -121,7 +136,6 @@ export default function Rentas() {
     }
   }
 
-  // Artículos filtrados por búsqueda y categoría
   const articulosFiltrados = articulos.filter(a => {
     const coincide  = coincideFlexible(a.nombre, busqueda);
     const categoria = !filtroCategoria || a.id_categoria === Number(filtroCategoria);
@@ -187,7 +201,17 @@ export default function Rentas() {
                     ${Number(r.total).toLocaleString("es-MX", { minimumFractionDigits: 2 })}
                   </td>
                   <td className="px-4 py-3">
-                    <Badge tono={TONO_ESTADO[r.estado] || "neutro"}>{r.estado}</Badge>
+                    {/* Badge clickeable para cambiar estado */}
+                    <button
+                      onClick={() => { setEditandoEstado(r); setNuevoEstado(r.estado); }}
+                      className="group/estado"
+                      title="Cambiar estado"
+                    >
+                      <Badge tono={TONO_ESTADO[r.estado] || "neutro"}>
+                        {r.estado}
+                        <Pencil size={10} className="inline ml-1 opacity-0 group-hover/estado:opacity-60" />
+                      </Badge>
+                    </button>
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-3 justify-end">
@@ -208,7 +232,7 @@ export default function Rentas() {
         )}
       </div>
 
-      {/* Modal nueva renta — Paso 1: datos */}
+      {/* Modal nueva renta — Paso 1 */}
       <Modal abierto={modalNueva && paso === 1} onCerrar={() => setModalNueva(false)} titulo="Nueva renta">
         <div className="flex flex-col gap-4">
           <Campo etiqueta="Nombre del cliente">
@@ -222,11 +246,7 @@ export default function Rentas() {
             </Campo>
             <Campo etiqueta="Estado">
               <Select value={form.estado} onChange={e => setForm({ ...form, estado: e.target.value })}>
-                <option value="cotizacion">Cotización</option>
-                <option value="confirmada">Confirmada</option>
-                <option value="entregada">Entregada</option>
-                <option value="devuelta">Devuelta</option>
-                <option value="cancelada">Cancelada</option>
+                {ESTADOS.map(s => <option key={s} value={s}>{s}</option>)}
               </Select>
             </Campo>
           </div>
@@ -259,13 +279,10 @@ export default function Rentas() {
         </div>
       </Modal>
 
-      {/* Paso 2: selección de artículos — pantalla completa */}
+      {/* Paso 2: artículos */}
       {modalNueva && paso === 2 && (
         <div className="fixed inset-0 z-50 bg-ink/40 flex items-center justify-center p-4">
-          <div className="bg-paper rounded-2xl w-full max-w-3xl flex flex-col"
-               style={{ maxHeight: "90vh" }}>
-
-            {/* Encabezado */}
+          <div className="bg-paper rounded-2xl w-full max-w-3xl flex flex-col" style={{ maxHeight: "90vh" }}>
             <div className="px-6 pt-6 pb-4 border-b border-line shrink-0">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="font-display text-lg font-semibold">Seleccionar artículos</h2>
@@ -276,30 +293,19 @@ export default function Rentas() {
                   </span>
                 )}
               </div>
-
-              {/* Filtros */}
               <div className="flex gap-2 flex-wrap">
                 <div className="relative flex-1 min-w-[180px]">
                   <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-soft" />
-                  <input
-                    value={busqueda}
-                    onChange={e => setBusqueda(e.target.value)}
+                  <input value={busqueda} onChange={e => setBusqueda(e.target.value)}
                     placeholder="Buscar artículo..."
                     className="w-full pl-8 pr-3 py-2 rounded-lg border border-line bg-paper text-sm
-                               focus:outline-none focus:ring-2 focus:ring-gold/40"
-                  />
+                               focus:outline-none focus:ring-2 focus:ring-gold/40" />
                 </div>
-                {/* Botones de categoría */}
                 <div className="flex gap-1.5 flex-wrap">
-                  <button
-                    onClick={() => setFiltroCategoria("")}
+                  <button onClick={() => setFiltroCategoria("")}
                     className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                      filtroCategoria === ""
-                        ? "bg-ink text-white"
-                        : "bg-mist text-ink-soft hover:bg-paper border border-line"
-                    }`}>
-                    Todos
-                  </button>
+                      filtroCategoria === "" ? "bg-ink text-white" : "bg-mist text-ink-soft hover:bg-paper border border-line"
+                    }`}>Todos</button>
                   {categorias.map(cat => (
                     <button key={cat.id_categoria}
                       onClick={() => setFiltroCategoria(
@@ -309,15 +315,11 @@ export default function Rentas() {
                         filtroCategoria === String(cat.id_categoria)
                           ? "bg-gold-deep text-white"
                           : "bg-mist text-ink-soft hover:bg-paper border border-line"
-                      }`}>
-                      {cat.nombre}
-                    </button>
+                      }`}>{cat.nombre}</button>
                   ))}
                 </div>
               </div>
             </div>
-
-            {/* Lista de artículos con scroll */}
             <div className="overflow-y-auto flex-1 px-6 py-3">
               {articulosFiltrados.length === 0 ? (
                 <p className="text-center text-ink-soft text-sm py-8">No se encontraron artículos.</p>
@@ -337,23 +339,17 @@ export default function Rentas() {
                         </div>
                         <div className="flex items-center gap-1 shrink-0">
                           <span className="text-xs text-ink-soft">Cant.</span>
-                          <input type="number" min="0"
-                            value={cant || ""}
-                            placeholder="0"
+                          <input type="number" min="0" value={cant || ""} placeholder="0"
                             onChange={e => actualizarSeleccion(a.id_articulo, "cantidad", e.target.value)}
                             className="w-14 text-center text-sm border border-line rounded-lg py-1
-                                       focus:outline-none focus:ring-2 focus:ring-gold/40
-                                       bg-paper" />
+                                       focus:outline-none focus:ring-2 focus:ring-gold/40 bg-paper" />
                         </div>
                         <div className="flex items-center gap-1 shrink-0">
                           <span className="text-xs text-ink-soft">$</span>
-                          <input type="number" min="0" step="0.01"
-                            value={precio || ""}
-                            placeholder="0"
+                          <input type="number" min="0" step="0.01" value={precio || ""} placeholder="0"
                             onChange={e => actualizarSeleccion(a.id_articulo, "precio_unitario", e.target.value)}
                             className="w-20 text-center text-sm border border-line rounded-lg py-1
-                                       focus:outline-none focus:ring-2 focus:ring-gold/40
-                                       bg-paper" />
+                                       focus:outline-none focus:ring-2 focus:ring-gold/40 bg-paper" />
                         </div>
                       </div>
                     );
@@ -361,8 +357,6 @@ export default function Rentas() {
                 </div>
               )}
             </div>
-
-            {/* Pie */}
             <div className="px-6 py-4 border-t border-line flex justify-between items-center shrink-0">
               <Boton variante="fantasma" onClick={() => setPaso(1)}>← Atrás</Boton>
               <div className="flex gap-2">
@@ -375,6 +369,24 @@ export default function Rentas() {
           </div>
         </div>
       )}
+
+      {/* Modal cambiar estado */}
+      <Modal abierto={!!editandoEstado} onCerrar={() => setEditandoEstado(null)} titulo="Cambiar estado de la renta">
+        <form onSubmit={guardarEstado} className="flex flex-col gap-4">
+          <p className="text-sm text-ink-soft">
+            Renta: <span className="font-medium text-ink">{editandoEstado?.nombre_cliente}</span>
+          </p>
+          <Campo etiqueta="Nuevo estado">
+            <Select value={nuevoEstado} onChange={e => setNuevoEstado(e.target.value)}>
+              {ESTADOS.map(s => <option key={s} value={s}>{s}</option>)}
+            </Select>
+          </Campo>
+          <div className="flex justify-end gap-2">
+            <Boton variante="fantasma" type="button" onClick={() => setEditandoEstado(null)}>Cancelar</Boton>
+            <Boton variante="dorado" type="submit">Guardar estado</Boton>
+          </div>
+        </form>
+      </Modal>
 
       <ModalCotizacion
         abierto={!!rentaCotizacion}
