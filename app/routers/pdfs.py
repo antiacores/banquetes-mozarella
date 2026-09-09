@@ -2,15 +2,19 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
 from app.database import get_db
 from app import models
+from app.routers.cajon import ListaCajon  # import al inicio, no en runtime
 import io, base64, tempfile, os
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.units import cm
 from reportlab.lib import colors
-from reportlab.platypus import Table, TableStyle
-from reportlab.pdfgen import canvas
+from reportlab.platypus import (
+    SimpleDocTemplate, Table, TableStyle, Spacer, Paragraph, PageBreak
+)
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.pdfgen import canvas as rl_canvas
 
 MESES_ES = {
     1: "enero", 2: "febrero", 3: "marzo", 4: "abril",
@@ -25,7 +29,7 @@ def fecha_es(d) -> str:
 
 router = APIRouter(prefix="/pdf", tags=["PDFs"])
 
-# ── Schemas para extras ───────────────────────────────────────────────────
+# ── Schemas ───────────────────────────────────────────────────────────────
 
 class ExtraItem(BaseModel):
     nombre: str
@@ -119,126 +123,182 @@ def _footer(c, W, con_correos=False):
 
 
 
-# ── Generadores PDF ───────────────────────────────────────────────────────
+# ── Header/Footer para SimpleDocTemplate ─────────────────────────────────
+
+def _make_canvas_fn(nombre, fecha, titulo=None, logo_b64=None):
+    """Devuelve una función que dibuja header y footer en cada página."""
+    def on_page(canvas, doc):
+        W, H = letter
+        canvas.saveState()
+
+        # Header beige
+        canvas.setFillColor(BEIGE)
+        canvas.rect(0, H - 3.8*cm, 8*cm, 3.8*cm, fill=1, stroke=0)
+
+        # Logo
+        tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        tmp.write(base64.b64decode(LOGO_B64))
+        tmp.close()
+        try:
+            canvas.drawImage(tmp.name, 0.5*cm, H - 3.4*cm,
+                           width=6.5*cm, height=2.9*cm,
+                           preserveAspectRatio=True, mask="auto")
+        finally:
+            os.unlink(tmp.name)
+
+        # Texto header
+        canvas.setFillColor(NEGRO)
+        if titulo:
+            canvas.setFont("Helvetica-Bold", 18)
+            canvas.drawRightString(W - 2*cm, H - 1.5*cm, titulo)
+            canvas.setFont("Helvetica", 11)
+            canvas.drawRightString(W - 2*cm, H - 2.3*cm, nombre)
+            canvas.drawRightString(W - 2*cm, H - 3.0*cm, fecha)
+        else:
+            canvas.setFont("Helvetica", 10)
+            canvas.drawRightString(W - 2*cm, H - 1.8*cm, nombre)
+            canvas.drawRightString(W - 2*cm, H - 2.7*cm, fecha)
+
+        # Footer
+        canvas.setFillColor(BEIGE)
+        canvas.rect(0, 0, W * 0.42, 1.8*cm, fill=1, stroke=0)
+        canvas.setFillColor(OSCURO)
+        canvas.rect(W * 0.58, 0, W * 0.42, 1.8*cm, fill=1, stroke=0)
+        canvas.setFillColor(NEGRO)
+        canvas.setFont("Helvetica", 8.5)
+        if titulo:  # cotización
+            canvas.drawString(1.2*cm, 0.9*cm, "228-848-0489")
+            canvas.setFillColor(BLANCO)
+            canvas.setFont("Helvetica", 8)
+            canvas.drawRightString(W - 0.8*cm, 0.85*cm, "info@eventosmozzarella.com")
+        else:  # trabajadores
+            canvas.drawString(1.2*cm, 1.0*cm, "222 584 4504   -   2211705890")
+            canvas.setFillColor(BLANCO)
+            canvas.setFont("Helvetica", 7.5)
+            canvas.drawRightString(W - 0.8*cm, 1.3*cm, "www.eventosmozzarella.com")
+            canvas.drawRightString(W - 0.8*cm, 0.8*cm, "info@eventosmozzarella.com")
+            canvas.drawRightString(W - 0.8*cm, 0.3*cm, "admin@eventosmozzarella.com")
+
+        canvas.restoreState()
+    return on_page
+
+
+# ── Generador PDF Trabajadores (multi-página) ─────────────────────────────
 
 def generar_pdf_trabajadores(nombre, fecha, articulos, articulos_cajon=None):
-    """
-    articulos:       lista de dicts {nombre, cantidad_asignada}  — inventario
-    articulos_cajon: lista de dicts {nombre, cantidad_asignada}  — cajón (opcional)
-    """
     buf = io.BytesIO()
-    c = canvas.Canvas(buf, pagesize=letter)
     W, H = letter
 
-    _header(c, W, H, nombre, fecha)
+    # Márgenes: top=4.5cm (header), bottom=2.5cm (footer+margen)
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=letter,
+        topMargin=4.5*cm,
+        bottomMargin=2.5*cm,
+        leftMargin=1.5*cm,
+        rightMargin=1.5*cm,
+    )
 
     col_w = [3.5*cm, 8*cm, 3.5*cm, 4*cm]
-
-    # Tabla inventario
-    encabezados = [["Cant. asignada", "Artículo", "Cant. devuelta", "Observaciones"]]
-    filas = [[str(a["cantidad_asignada"]), a["nombre"], "", ""] for a in articulos]
-    datos = encabezados + filas
-    row_h = [0.9*cm] + [1.5*cm] * len(filas)
-    tabla = Table(datos, colWidths=col_w, rowHeights=row_h)
-    tabla.setStyle(TableStyle([
+    estilo_tabla = TableStyle([
         ("FONTNAME",  (0, 0), (-1,  0), "Helvetica"),
         ("FONTSIZE",  (0, 0), (-1,  0), 8),
         ("TEXTCOLOR", (0, 0), (-1,  0), GRIS_T),
         ("FONTNAME",  (0, 1), (-1, -1), "Helvetica"),
-        ("FONTSIZE",  (0, 1), (-1, -1), 12),
+        ("FONTSIZE",  (0, 1), (-1, -1), 11),
         ("TEXTCOLOR", (0, 1), (-1, -1), NEGRO),
         ("ALIGN",     (0, 0), (-1, -1), "CENTER"),
         ("VALIGN",    (0, 0), (-1, -1), "MIDDLE"),
         ("GRID",      (0, 0), (-1, -1), 0.5, colors.HexColor("#bbbbbb")),
-    ]))
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f9f8f6")]),
+    ])
 
-    tabla_w = sum(col_w)
-    tabla_h = sum(row_h)
-    x0 = (W - tabla_w) / 2
-    y0 = H - 4.8*cm - tabla_h
-    tabla.wrapOn(c, tabla_w, H)
-    tabla.drawOn(c, x0, y0)
+    elementos = []
 
-    y_actual = y0
+    # Tabla inventario
+    enc = [["Cant. asignada", "Artículo", "Cant. devuelta", "Observaciones"]]
+    filas = [[str(a["cantidad_asignada"]), a["nombre"], "", ""] for a in articulos]
+    row_h = [0.85*cm] + [1.4*cm] * len(filas)
+    t = Table(enc + filas, colWidths=col_w, rowHeights=row_h, repeatRows=1)
+    t.setStyle(estilo_tabla)
+    elementos.append(t)
 
-    # Tabla cajón (si hay artículos con cantidad > 0)
+    # Tabla cajón
     if articulos_cajon:
-        y_actual -= 0.8*cm
-        c.setFont("Helvetica-Bold", 9)
-        c.setFillColor(GRIS_T)
-        c.drawString(x0, y_actual, "ARTÍCULOS DE CAJÓN")
-        y_actual -= 0.4*cm
+        elementos.append(Spacer(1, 0.6*cm))
+        estilo_cajon = ParagraphStyle("cajon", fontName="Helvetica-Bold",
+                                      fontSize=9, textColor=colors.HexColor("#888880"))
+        elementos.append(Paragraph("ARTÍCULOS DE CAJÓN", estilo_cajon))
+        elementos.append(Spacer(1, 0.2*cm))
 
-        enc_cajon = [["Cant.", "Artículo", "Cant. devuelta", "Observaciones"]]
-        filas_cajon = [[str(a["cantidad_asignada"]), a["nombre"], "", ""] for a in articulos_cajon]
-        datos_cajon = enc_cajon + filas_cajon
-        row_h_cajon = [0.7*cm] + [1.2*cm] * len(filas_cajon)
-        tabla_cajon = Table(datos_cajon, colWidths=col_w, rowHeights=row_h_cajon)
-        tabla_cajon.setStyle(TableStyle([
+        enc_c = [["Cant.", "Artículo", "Cant. devuelta", "Observaciones"]]
+        filas_c = [[str(a["cantidad_asignada"]), a["nombre"], "", ""] for a in articulos_cajon]
+        row_h_c = [0.7*cm] + [1.2*cm] * len(filas_c)
+        estilo_c = TableStyle([
             ("FONTNAME",  (0, 0), (-1,  0), "Helvetica"),
             ("FONTSIZE",  (0, 0), (-1,  0), 7),
             ("TEXTCOLOR", (0, 0), (-1,  0), GRIS_T),
+            ("BACKGROUND",(0, 0), (-1,  0), colors.HexColor("#f5f3ef")),
             ("FONTNAME",  (0, 1), (-1, -1), "Helvetica"),
             ("FONTSIZE",  (0, 1), (-1, -1), 10),
             ("TEXTCOLOR", (0, 1), (-1, -1), NEGRO),
             ("ALIGN",     (0, 0), (-1, -1), "CENTER"),
             ("VALIGN",    (0, 0), (-1, -1), "MIDDLE"),
             ("GRID",      (0, 0), (-1, -1), 0.5, colors.HexColor("#bbbbbb")),
-            ("BACKGROUND",(0, 0), (-1,  0), colors.HexColor("#f5f3ef")),
-        ]))
-        tabla_h_cajon = sum(row_h_cajon)
-        tabla_cajon.wrapOn(c, tabla_w, H)
-        tabla_cajon.drawOn(c, x0, y_actual - tabla_h_cajon)
-        y_actual -= tabla_h_cajon + 0.3*cm
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f9f8f6")]),
+        ])
+        tc = Table(enc_c + filas_c, colWidths=col_w, rowHeights=row_h_c, repeatRows=1)
+        tc.setStyle(estilo_c)
+        elementos.append(tc)
 
-    # Campos de firma
+    # Campos de firma al final
+    elementos.append(Spacer(1, 1.0*cm))
     campos = [
         "Nombre y firma de entregado:",
         "Faltantes:",
         "Comentarios o sugerencias:",
         "Nombre y firma de devolución:",
     ]
-    y_f = y_actual - 1.2*cm
-    c.setFont("Helvetica", 9)
-    c.setFillColor(NEGRO)
+    estilo_firma = ParagraphStyle("firma", fontName="Helvetica", fontSize=9, textColor=NEGRO)
     for campo in campos:
-        c.drawString(2*cm, y_f, campo)
-        tw = c.stringWidth(campo, "Helvetica", 9)
-        c.setStrokeColor(NEGRO)
-        c.line(2*cm + tw + 0.3*cm, y_f - 0.1*cm, W/2 + 3*cm, y_f - 0.1*cm)
-        y_f -= 1.1*cm
+        elementos.append(Paragraph(f"{campo} {'_' * 60}", estilo_firma))
+        elementos.append(Spacer(1, 0.7*cm))
 
-    _footer(c, W, con_correos=False)
-    c.save()
+    on_page = _make_canvas_fn(nombre, fecha, titulo=None)
+    doc.build(elementos, onFirstPage=on_page, onLaterPages=on_page)
     buf.seek(0)
     return buf
 
 
+# ── Generador PDF Cotización (multi-página) ───────────────────────────────
+
 def generar_pdf_cotizacion(nombre, fecha, articulos, extras_filas, articulos_cajon=None):
-    """
-    articulos:       lista de dicts {nombre, cantidad, precio_unitario}  — inventario
-    extras_filas:    lista de dicts {nombre, monto}
-    articulos_cajon: lista de dicts {nombre, cantidad, precio_unitario}  — cajón (opcional)
-    """
     buf = io.BytesIO()
-    c = canvas.Canvas(buf, pagesize=letter)
-    W, H = letter
 
-    _header(c, W, H, nombre, fecha, titulo="Cotización")
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=letter,
+        topMargin=4.5*cm,
+        bottomMargin=2.5*cm,
+        leftMargin=1.5*cm,
+        rightMargin=1.5*cm,
+    )
 
-    # Combinar inventario + cajón en una sola tabla
+    col_w = [2.8*cm, 9*cm, 3.5*cm, 3.3*cm]
+
+    # Combinar inventario + cajón
     todos = list(articulos)
     if articulos_cajon:
         todos += articulos_cajon
 
-    encabezados = [["CANTIDAD", "DESCRIPCIÓN", "PRECIO UNIT.", "PRECIO TOT."]]
+    enc = [["CANTIDAD", "DESCRIPCIÓN", "PRECIO UNIT.", "PRECIO TOT."]]
     filas = []
     for a in todos:
         total_art = a["cantidad"] * float(a["precio_unitario"])
         filas.append([
             str(a["cantidad"]),
             a["nombre"],
-            f"$    {float(a['precio_unitario']):,.2f}",
+            f"$  {float(a['precio_unitario']):,.2f}",
             f"${total_art:,.2f}",
         ])
 
@@ -252,49 +312,44 @@ def generar_pdf_cotizacion(nombre, fecha, articulos, extras_filas, articulos_caj
     ]
     fila_total = ["", "", "TOTAL", f"${total_final:,.2f}"]
 
-    datos = encabezados + filas + filas_extras + [fila_total]
-
-    col_w = [2.8*cm, 9*cm, 3.5*cm, 3.3*cm]
-    n_extras = len(filas_extras)
-    row_h = [0.85*cm] + [0.7*cm] * len(filas) + [0.75*cm] * n_extras + [0.85*cm]
+    datos = enc + filas + filas_extras + [fila_total]
     n = len(datos)
+    n_extras = len(filas_extras)
 
-    tabla = Table(datos, colWidths=col_w, rowHeights=row_h)
+    row_h = [0.85*cm] + [0.7*cm] * len(filas) + [0.75*cm] * n_extras + [0.9*cm]
+
+    tabla = Table(datos, colWidths=col_w, rowHeights=row_h, repeatRows=1)
     tabla.setStyle(TableStyle([
         ("FONTNAME",  (0, 0), (-1, 0),       "Helvetica-Bold"),
         ("FONTSIZE",  (0, 0), (-1, 0),       8.5),
         ("ALIGN",     (0, 0), (-1, 0),       "CENTER"),
+        ("BACKGROUND",(0, 0), (-1, 0),       colors.HexColor("#f5f3ef")),
         ("FONTNAME",  (0, 1), (-1, n - n_extras - 2), "Helvetica"),
         ("FONTSIZE",  (0, 1), (-1, n - n_extras - 2), 9),
         ("ALIGN",     (0, 1), (0,  n - n_extras - 2), "CENTER"),
-        ("ALIGN",     (1, 1), (1,  n - n_extras - 2), "CENTER"),
+        ("ALIGN",     (1, 1), (1,  n - n_extras - 2), "LEFT"),
         ("ALIGN",     (2, 1), (3,  n - n_extras - 2), "RIGHT"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, n - n_extras - 2),
+         [colors.white, colors.HexColor("#f9f8f6")]),
         ("FONTNAME",  (2, n - n_extras - 1), (3, n - 2), "Helvetica-Bold"),
         ("FONTSIZE",  (2, n - n_extras - 1), (3, n - 2), 9),
         ("ALIGN",     (2, n - n_extras - 1), (3, n - 2), "RIGHT"),
         ("FONTNAME",  (2, n - 1), (3, n - 1), "Helvetica-Bold"),
-        ("FONTSIZE",  (2, n - 1), (3, n - 1), 10),
+        ("FONTSIZE",  (2, n - 1), (3, n - 1), 11),
         ("ALIGN",     (2, n - 1), (3, n - 1), "RIGHT"),
         ("TEXTCOLOR", (3, n - 1), (3, n - 1), ORO),
         ("GRID",      (0, 0), (-1, n - n_extras - 2), 0.5, colors.HexColor("#bbbbbb")),
         ("LINEABOVE", (2, n - n_extras - 1), (3, n - 1), 0.5, colors.HexColor("#bbbbbb")),
         ("LINEBELOW", (2, n - n_extras - 1), (3, n - 2), 0.5, colors.HexColor("#bbbbbb")),
-        ("LINEBELOW", (2, n - 1), (3, n - 1), 0.5, colors.HexColor("#bbbbbb")),
+        ("LINEBELOW", (2, n - 1), (3, n - 1), 1.0, ORO),
         ("LINEBEFORE",(2, n - n_extras - 1), (2, n - 1), 0.5, colors.HexColor("#bbbbbb")),
         ("LINEAFTER", (3, n - n_extras - 1), (3, n - 1), 0.5, colors.HexColor("#bbbbbb")),
         ("VALIGN",    (0, 0), (-1, -1), "MIDDLE"),
         ("TEXTCOLOR", (0, 0), (-1, -1), NEGRO),
     ]))
 
-    tabla_w = sum(col_w)
-    tabla_h = sum(row_h)
-    x0 = (W - tabla_w) / 2
-    y0 = H - 5*cm - tabla_h
-    tabla.wrapOn(c, tabla_w, H)
-    tabla.drawOn(c, x0, y0)
-
-    _footer(c, W, con_correos=True)
-    c.save()
+    on_page = _make_canvas_fn(nombre, fecha, titulo="Cotización")
+    doc.build([tabla], onFirstPage=on_page, onLaterPages=on_page)
     buf.seek(0)
     return buf
 
@@ -303,8 +358,6 @@ def generar_pdf_cotizacion(nombre, fecha, articulos, extras_filas, articulos_caj
 
 @router.get("/evento/{id_evento}/trabajadores")
 def pdf_evento_trabajadores(id_evento: int, db: Session = Depends(get_db)):
-    from app.routers.cajon import ListaCajon
-
     evento = db.query(models.Evento).filter(
         models.Evento.id_evento == id_evento
     ).first()
@@ -324,7 +377,6 @@ def pdf_evento_trabajadores(id_evento: int, db: Session = Depends(get_db)):
             "cantidad_asignada": d.cantidad_asignada,
         })
 
-    # Artículos de cajón con cantidad > 0
     cajon = db.query(ListaCajon).filter(
         ListaCajon.id_evento == id_evento,
         ListaCajon.cantidad > 0,
@@ -334,9 +386,9 @@ def pdf_evento_trabajadores(id_evento: int, db: Session = Depends(get_db)):
         for c in cajon
     ] if cajon else None
 
-    fecha_fmt = fecha_es(evento.fecha)
     buf = generar_pdf_trabajadores(
-        evento.nombre_cliente or "Sin nombre", fecha_fmt, articulos, articulos_cajon
+        evento.nombre_cliente or "Sin nombre", fecha_es(evento.fecha),
+        articulos, articulos_cajon
     )
     return StreamingResponse(buf, media_type="application/pdf",
         headers={"Content-Disposition": f"inline; filename=evento_{id_evento}_trabajadores.pdf"})
@@ -348,8 +400,6 @@ def pdf_evento_cotizacion(
     payload: CotizacionPayload,
     db: Session = Depends(get_db),
 ):
-    from app.routers.cajon import ListaCajon
-
     evento = db.query(models.Evento).filter(
         models.Evento.id_evento == id_evento
     ).first()
@@ -364,19 +414,15 @@ def pdf_evento_cotizacion(
         art = db.query(models.Articulo).filter(
             models.Articulo.id_articulo == d.id_articulo
         ).first()
-        if d.precio_override is not None:
-            precio = float(d.precio_override)
-        elif art and art.costo_unitario:
-            precio = float(art.costo_unitario)
-        else:
-            precio = 0.0
+        precio = (float(d.precio_override) if d.precio_override is not None
+                  else float(art.costo_unitario) if art and art.costo_unitario
+                  else 0.0)
         articulos.append({
             "nombre": art.nombre if art else f"#{d.id_articulo}",
             "cantidad": d.cantidad_asignada,
             "precio_unitario": precio,
         })
 
-    # Artículos de cajón con cantidad > 0
     cajon = db.query(ListaCajon).filter(
         ListaCajon.id_evento == id_evento,
         ListaCajon.cantidad > 0,
@@ -390,10 +436,9 @@ def pdf_evento_cotizacion(
         for c in cajon
     ] if cajon else None
 
-    fecha_fmt    = fecha_es(evento.fecha)
-    extras_filas = _extras_a_filas(payload)
     buf = generar_pdf_cotizacion(
-        evento.nombre_cliente or "Sin nombre", fecha_fmt, articulos, extras_filas, articulos_cajon
+        evento.nombre_cliente or "Sin nombre", fecha_es(evento.fecha),
+        articulos, _extras_a_filas(payload), articulos_cajon
     )
     return StreamingResponse(buf, media_type="application/pdf",
         headers={"Content-Disposition": f"inline; filename=evento_{id_evento}_cotizacion.pdf"})
@@ -406,9 +451,7 @@ def pdf_renta_trabajadores(id_renta: int, db: Session = Depends(get_db)):
     if not renta:
         raise HTTPException(404, "Renta no encontrada")
 
-    detalles = db.query(DetalleRenta).filter(
-        DetalleRenta.id_renta == id_renta
-    ).all()
+    detalles = db.query(DetalleRenta).filter(DetalleRenta.id_renta == id_renta).all()
     articulos = []
     for d in detalles:
         art = db.query(models.Articulo).filter(
@@ -419,8 +462,7 @@ def pdf_renta_trabajadores(id_renta: int, db: Session = Depends(get_db)):
             "cantidad_asignada": d.cantidad,
         })
 
-    fecha_fmt = fecha_es(renta.fecha_entrega)
-    buf = generar_pdf_trabajadores(renta.nombre_cliente, fecha_fmt, articulos)
+    buf = generar_pdf_trabajadores(renta.nombre_cliente, fecha_es(renta.fecha_entrega), articulos)
     return StreamingResponse(buf, media_type="application/pdf",
         headers={"Content-Disposition": f"inline; filename=renta_{id_renta}_trabajadores.pdf"})
 
@@ -436,9 +478,7 @@ def pdf_renta_cotizacion(
     if not renta:
         raise HTTPException(404, "Renta no encontrada")
 
-    detalles = db.query(DetalleRenta).filter(
-        DetalleRenta.id_renta == id_renta
-    ).all()
+    detalles = db.query(DetalleRenta).filter(DetalleRenta.id_renta == id_renta).all()
     articulos = []
     for d in detalles:
         art = db.query(models.Articulo).filter(
@@ -450,8 +490,9 @@ def pdf_renta_cotizacion(
             "precio_unitario": float(d.precio_override or d.precio_unitario or 0),
         })
 
-    fecha_fmt    = fecha_es(renta.fecha_entrega)
-    extras_filas = _extras_a_filas(payload)
-    buf = generar_pdf_cotizacion(renta.nombre_cliente, fecha_fmt, articulos, extras_filas)
+    buf = generar_pdf_cotizacion(
+        renta.nombre_cliente, fecha_es(renta.fecha_entrega),
+        articulos, _extras_a_filas(payload)
+    )
     return StreamingResponse(buf, media_type="application/pdf",
         headers={"Content-Disposition": f"inline; filename=renta_{id_renta}_cotizacion.pdf"})
