@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import Column, Integer, String, ForeignKey, text
+from sqlalchemy import Column, Integer, String, ForeignKey, Numeric
 from sqlalchemy.orm import Session
 from typing import Optional
 from pydantic import BaseModel
@@ -18,6 +18,7 @@ class ListaCajon(Base):
     cantidad     = Column(Integer)
     modelo_color = Column(String(100))
     orden        = Column(Integer, default=0)
+    precio       = Column(Numeric(10, 2), nullable=True)  # NUEVO
 
 
 class PlantillaCajon(Base):
@@ -34,6 +35,7 @@ class ItemCajonCrear(BaseModel):
     cantidad:     Optional[int] = None
     modelo_color: Optional[str] = None
     orden:        int = 0
+    precio:       Optional[float] = None  # NUEVO
 
 
 class ItemCajonActualizar(BaseModel):
@@ -41,6 +43,7 @@ class ItemCajonActualizar(BaseModel):
     cantidad:     Optional[int] = None
     modelo_color: Optional[str] = None
     orden:        Optional[int] = None
+    precio:       Optional[float] = None  # NUEVO
 
 
 # ── Router ────────────────────────────────────────────────────────────────
@@ -56,7 +59,6 @@ def listar_cajon(id_evento: int, db: Session = Depends(get_db)):
     ).order_by(ListaCajon.orden).all()
 
     if not items:
-        # Primera vez: copiar la plantilla
         plantilla = db.query(PlantillaCajon).order_by(PlantillaCajon.orden).all()
         for p in plantilla:
             item = ListaCajon(
@@ -77,6 +79,7 @@ def listar_cajon(id_evento: int, db: Session = Depends(get_db)):
             "cantidad":     i.cantidad,
             "modelo_color": i.modelo_color,
             "orden":        i.orden,
+            "precio":       float(i.precio) if i.precio is not None else None,  # NUEVO
         }
         for i in items
     ]
@@ -124,4 +127,3 @@ def resetear_cajon(id_evento: int, db: Session = Depends(get_db)):
     """Borra la lista actual y la recrea desde la plantilla."""
     db.query(ListaCajon).filter(ListaCajon.id_evento == id_evento).delete()
     db.commit()
-    # Al hacer GET de nuevo se recreará desde plantilla
