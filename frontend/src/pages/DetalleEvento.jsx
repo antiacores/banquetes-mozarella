@@ -36,14 +36,17 @@ export default function DetalleEvento() {
   const [detalles, setDetalles]     = useState([]);
   const [categorias, setCategorias] = useState([]);
   const [alertas, setAlertas]       = useState([]);
+  const [cajon, setCajon]           = useState([]); // artículos de cajón con cantidad > 0
   const [cargando, setCargando]     = useState(true);
   const [error, setError]           = useState(null);
 
   const [checklist, setChecklist]                   = useState({});
   const [guardandoChecklist, setGuardandoChecklist] = useState(false);
 
-  const [editandoPrecio, setEditandoPrecio] = useState(null);
-  const [precioTemp, setPrecioTemp]         = useState("");
+  const [editandoPrecio, setEditandoPrecio]     = useState(null);
+  const [precioTemp, setPrecioTemp]             = useState("");
+  const [editandoPrecioCajon, setEditandoPrecioCajon] = useState(null);
+  const [precioTempCajon, setPrecioTempCajon]   = useState("");
 
   const [modalDevolucion, setModalDevolucion] = useState(null);
   const [cantDevuelta, setCantDevuelta]       = useState("");
@@ -57,16 +60,18 @@ export default function DetalleEvento() {
 
   async function cargar() {
     try {
-      const [ev, dets, cats, al] = await Promise.all([
+      const [ev, dets, cats, al, caj] = await Promise.all([
         obtenerEvento(id),
         api.get(`/detalle-evento/evento/${id}`).then(r => r.data),
         listarCategorias(),
         api.get(`/detalle-evento/evento/${id}/alertas`).then(r => r.data),
+        api.get(`/cajon/evento/${id}`).then(r => r.data),
       ]);
       setEvento(ev);
       setDetalles(dets);
       setCategorias(cats);
       setAlertas(al.alertas || []);
+      setCajon(caj.filter(c => c.cantidad > 0)); // solo los que tienen cantidad
       const inicial = {};
       dets.forEach(d => { inicial[d.id_articulo] = d.cantidad_asignada; });
       setChecklist(inicial);
@@ -118,6 +123,18 @@ export default function DetalleEvento() {
         precio_override: precioTemp === "" ? null : Number(precioTemp)
       });
       setEditandoPrecio(null);
+      await cargar();
+    } catch (err) {
+      alert(err?.response?.data?.detail || "Error.");
+    }
+  }
+
+  async function guardarPrecioCajon(idCajon) {
+    try {
+      await api.put(`/cajon/${idCajon}`, {
+        precio: precioTempCajon === "" ? null : Number(precioTempCajon)
+      });
+      setEditandoPrecioCajon(null);
       await cargar();
     } catch (err) {
       alert(err?.response?.data?.detail || "Error.");
@@ -220,25 +237,17 @@ export default function DetalleEvento() {
           </h1>
         </div>
         <div className="flex gap-2 flex-wrap justify-end">
-          {/* PDF trabajadores — ambos perfiles */}
-          <Boton variante="fantasma"
-            onClick={() => abrirPdf(`/pdf/evento/${id}/trabajadores`)}>
+          <Boton variante="fantasma" onClick={() => abrirPdf(`/pdf/evento/${id}/trabajadores`)}>
             <span className="flex items-center gap-1.5"><Download size={15} /> Trabajadores</span>
           </Boton>
-
-          {/* Cotización — solo jefe */}
           {puedeEditar && (
             <Boton variante="fantasma" onClick={() => setModalCotizacion(true)}>
               <span className="flex items-center gap-1.5"><FileText size={15} /> Cotización</span>
             </Boton>
           )}
-
-          {/* Finalizar — solo jefe */}
           {puedeEditar && !esFinalizado && detalles.length > 0 && (
             <Boton variante="dorado" onClick={abrirFinalizar}>
-              <span className="flex items-center gap-1.5">
-                <CheckCircle size={15} /> Finalizar evento
-              </span>
+              <span className="flex items-center gap-1.5"><CheckCircle size={15} /> Finalizar evento</span>
             </Boton>
           )}
         </div>
@@ -271,7 +280,6 @@ export default function DetalleEvento() {
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Checklist — solo jefe y solo si no está finalizado */}
         {puedeEditar && !esFinalizado && (
           <div>
             <div className="flex items-center justify-between mb-3">
@@ -288,14 +296,12 @@ export default function DetalleEvento() {
           </div>
         )}
 
-        {/* Artículos asignados */}
+        {/* Artículos asignados del inventario */}
         <div className={puedeEditar && !esFinalizado ? "" : "lg:col-span-2"}>
           <h2 className="font-display text-base font-semibold mb-3">
             Artículos asignados
             {detalles.length > 0 && (
-              <span className="ml-2 text-xs font-normal text-ink-soft">
-                ({detalles.length} artículos)
-              </span>
+              <span className="ml-2 text-xs font-normal text-ink-soft">({detalles.length})</span>
             )}
           </h2>
           <div className="bg-paper rounded-xl border border-line overflow-hidden">
@@ -315,8 +321,7 @@ export default function DetalleEvento() {
                     <td className="px-3 py-2.5 font-medium text-xs leading-tight">
                       {d.nombre_articulo}
                       <span className={`block text-xs font-normal ${
-                        d.cantidad_disponible_real < d.cantidad_asignada
-                          ? "text-alert" : "text-ink-soft"
+                        d.cantidad_disponible_real < d.cantidad_asignada ? "text-alert" : "text-ink-soft"
                       }`}>
                         {d.cantidad_disponible_real} disp. real
                       </span>
@@ -324,8 +329,7 @@ export default function DetalleEvento() {
                     <td className="px-3 py-2.5 text-right font-medium">{d.cantidad_asignada}</td>
                     <td className="px-3 py-2.5 text-right">
                       {!esFinalizado ? (
-                        <button
-                          onClick={() => { setModalDevolucion(d); setCantDevuelta(d.cantidad_devuelta || 0); }}
+                        <button onClick={() => { setModalDevolucion(d); setCantDevuelta(d.cantidad_devuelta || 0); }}
                           className="text-xs hover:underline">
                           {d.cantidad_devuelta > 0
                             ? <Badge tono="bueno">{d.cantidad_devuelta}</Badge>
@@ -337,14 +341,12 @@ export default function DetalleEvento() {
                           : <span className="text-ink-soft">0</span>
                       )}
                     </td>
-
                     {puedeEditar && (
                       <td className="px-3 py-2.5 text-right">
                         {!esFinalizado && editandoPrecio === d.id_detalle ? (
                           <div className="flex items-center gap-1 justify-end">
                             <span className="text-xs text-ink-soft">$</span>
-                            <input type="number" min="0" step="0.01"
-                              value={precioTemp}
+                            <input type="number" min="0" step="0.01" value={precioTemp}
                               onChange={e => setPrecioTemp(e.target.value)}
                               onKeyDown={e => {
                                 if (e.key === "Enter") guardarPrecio(d.id_detalle);
@@ -374,7 +376,6 @@ export default function DetalleEvento() {
                         )}
                       </td>
                     )}
-
                     {puedeEditar && !esFinalizado && (
                       <td className="px-3 py-2.5 text-right">
                         <button onClick={() => eliminarDetalle(d.id_detalle)}
@@ -387,8 +388,7 @@ export default function DetalleEvento() {
                 ))}
                 {detalles.length === 0 && (
                   <tr>
-                    <td colSpan={puedeEditar ? 5 : 3}
-                      className="px-4 py-8 text-center text-ink-soft">
+                    <td colSpan={puedeEditar ? 5 : 3} className="px-4 py-8 text-center text-ink-soft">
                       {puedeEditar
                         ? "Selecciona artículos del inventario y guarda la selección."
                         : "No hay artículos asignados a este evento todavía."}
@@ -404,17 +404,76 @@ export default function DetalleEvento() {
               Gris = precio base · Click para editar
             </p>
           )}
+
+          {/* Artículos de cajón con cantidad > 0 */}
+          {cajon.length > 0 && (
+            <div className="mt-4">
+              <h3 className="font-display text-sm font-semibold mb-2 text-ink-soft">
+                Artículos de cajón asignados
+                <span className="ml-2 text-xs font-normal">({cajon.length})</span>
+              </h3>
+              <div className="bg-paper rounded-xl border border-line overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-line text-left text-xs text-ink-soft uppercase tracking-wide">
+                      <th className="px-3 py-2.5 font-medium">Artículo</th>
+                      <th className="px-3 py-2.5 font-medium text-ink-soft">Modelo/Color</th>
+                      <th className="px-3 py-2.5 font-medium text-right">Cant.</th>
+                      {puedeEditar && <th className="px-3 py-2.5 font-medium text-right">Precio</th>}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cajon.map(c => (
+                      <tr key={c.id_cajon} className="border-b border-line last:border-0">
+                        <td className="px-3 py-2 font-medium text-xs">{c.nombre}</td>
+                        <td className="px-3 py-2 text-xs text-ink-soft">{c.modelo_color || "—"}</td>
+                        <td className="px-3 py-2 text-right text-xs font-medium">{c.cantidad}</td>
+                        {puedeEditar && (
+                          <td className="px-3 py-2 text-right">
+                            {editandoPrecioCajon === c.id_cajon ? (
+                              <div className="flex items-center gap-1 justify-end">
+                                <span className="text-xs text-ink-soft">$</span>
+                                <input type="number" min="0" step="0.01" value={precioTempCajon}
+                                  onChange={e => setPrecioTempCajon(e.target.value)}
+                                  onKeyDown={e => {
+                                    if (e.key === "Enter") guardarPrecioCajon(c.id_cajon);
+                                    if (e.key === "Escape") setEditandoPrecioCajon(null);
+                                  }}
+                                  className="w-20 text-right text-xs border border-gold rounded py-0.5 px-1"
+                                  autoFocus />
+                                <button onClick={() => guardarPrecioCajon(c.id_cajon)} className="text-gold-deep">
+                                  <Check size={13} />
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => { setEditandoPrecioCajon(c.id_cajon); setPrecioTempCajon(c.precio ?? ""); }}
+                                className="flex items-center gap-1 ml-auto text-xs group/precio">
+                                <span className={c.precio != null ? "text-gold-deep font-medium" : "text-ink-soft"}>
+                                  {c.precio != null ? `$${Number(c.precio).toLocaleString("es-MX")}` : "—"}
+                                </span>
+                                <Pencil size={11} className="opacity-0 group-hover/precio:opacity-60 text-ink-soft" />
+                              </button>
+                            )}
+                          </td>
+                        )}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Lista de cajón automática */}
+      {/* Lista de cajón completa (editable) */}
       <div className="mt-8">
         <ListaCajon idEvento={Number(id)} soloLectura={!puedeEditar} />
       </div>
 
       {/* Modal devolución */}
-      <Modal abierto={!!modalDevolucion} onCerrar={() => setModalDevolucion(null)}
-        titulo="Registrar devolución">
+      <Modal abierto={!!modalDevolucion} onCerrar={() => setModalDevolucion(null)} titulo="Registrar devolución">
         <form onSubmit={guardarDevolucion} className="flex flex-col gap-4">
           <p className="text-sm text-ink-soft">
             Artículo: <span className="font-medium text-ink">{modalDevolucion?.nombre_articulo}</span>
@@ -431,7 +490,6 @@ export default function DetalleEvento() {
         </form>
       </Modal>
 
-      {/* Modal cotización con extras — reemplaza el modal simple anterior */}
       <ModalCotizacion
         abierto={modalCotizacion}
         onCerrar={() => setModalCotizacion(false)}
@@ -439,8 +497,7 @@ export default function DetalleEvento() {
       />
 
       {/* Modal finalizar */}
-      <Modal abierto={modalFinalizar} onCerrar={() => !finalizando && setModalFinalizar(false)}
-        titulo="Finalizar evento">
+      <Modal abierto={modalFinalizar} onCerrar={() => !finalizando && setModalFinalizar(false)} titulo="Finalizar evento">
         {resultadoFinal ? (
           <div className="flex flex-col gap-4">
             <div className="flex items-center gap-3 bg-good-pale rounded-xl p-4">
@@ -486,8 +543,7 @@ export default function DetalleEvento() {
                 const noDevuelto = fila.cantidad_asignada - Number(fila.cantidad_devuelta || 0);
                 return (
                   <div key={fila.id_detalle}
-                    className={`grid grid-cols-12 gap-2 px-3 py-2.5 items-center
-                                border-b border-line last:border-0
+                    className={`grid grid-cols-12 gap-2 px-3 py-2.5 items-center border-b border-line last:border-0
                                 ${noDevuelto > 0 ? "bg-alert-pale/30" : ""}`}>
                     <span className="col-span-4 text-sm font-medium leading-tight truncate"
                       title={fila.nombre_articulo}>{fila.nombre_articulo}</span>
@@ -521,8 +577,9 @@ export default function DetalleEvento() {
               </div>
             )}
             <div className="flex justify-end gap-2 pt-2">
-              <Boton variante="fantasma" type="button"
-                onClick={() => setModalFinalizar(false)} disabled={finalizando}>Cancelar</Boton>
+              <Boton variante="fantasma" type="button" onClick={() => setModalFinalizar(false)} disabled={finalizando}>
+                Cancelar
+              </Boton>
               <Boton variante="dorado" type="submit" disabled={finalizando}>
                 {finalizando ? "Finalizando..." : "Confirmar y finalizar"}
               </Boton>
