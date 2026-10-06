@@ -33,14 +33,25 @@ export default function Rentas() {
   const [cargando, setCargando]     = useState(true);
   const [error, setError]           = useState(null);
 
+  // Modal nueva renta
   const [modalNueva, setModalNueva] = useState(false);
   const [form, setForm]             = useState(VACIO);
   const [seleccion, setSeleccion]   = useState({});
   const [guardando, setGuardando]   = useState(false);
   const [paso, setPaso]             = useState(1);
 
+  // Modal editar renta
+  const [rentaEditar, setRentaEditar]     = useState(null); // renta completa con artículos
+  const [formEditar, setFormEditar]       = useState(VACIO);
+  const [seleccionEditar, setSeleccionEditar] = useState({});
+  const [pasoEditar, setPasoEditar]       = useState(1);
+  const [guardandoEditar, setGuardandoEditar] = useState(false);
+  const [cargandoEditar, setCargandoEditar]   = useState(false);
+
   const [busqueda, setBusqueda]               = useState("");
   const [filtroCategoria, setFiltroCategoria] = useState("");
+  const [busquedaEditar, setBusquedaEditar]   = useState("");
+  const [filtroCatEditar, setFiltroCatEditar] = useState("");
 
   const [editandoEstado, setEditandoEstado] = useState(null);
   const [nuevoEstado, setNuevoEstado]       = useState("");
@@ -66,6 +77,7 @@ export default function Rentas() {
 
   useEffect(() => { cargar(); }, []);
 
+  // ── Editar estado rápido ───────────────────────────────────────────────
   async function guardarEstado(e) {
     e.preventDefault();
     try {
@@ -77,6 +89,90 @@ export default function Rentas() {
     }
   }
 
+  // ── Abrir modal editar ─────────────────────────────────────────────────
+  async function abrirEditar(r) {
+    setCargandoEditar(true);
+    try {
+      const { data } = await api.get(`/rentas/${r.id_renta}`);
+      setRentaEditar(data);
+      setFormEditar({
+        nombre_cliente:   data.nombre_cliente  || "",
+        telefono:         data.telefono        || "",
+        fecha_entrega:    data.fecha_entrega   || "",
+        fecha_devolucion: data.fecha_devolucion || "",
+        estado:           data.estado          || "cotizacion",
+        notas:            data.notas           || "",
+      });
+      // Precargar selección con artículos actuales
+      const sel = {};
+      data.articulos.forEach(a => {
+        sel[a.id_articulo] = {
+          cantidad:        a.cantidad,
+          precio_unitario: Number(a.precio_unitario) || 0,
+        };
+      });
+      setSeleccionEditar(sel);
+      setBusquedaEditar("");
+      setFiltroCatEditar("");
+      setPasoEditar(1);
+    } catch (err) {
+      alert("No se pudo cargar la renta.");
+    } finally {
+      setCargandoEditar(false);
+    }
+  }
+
+  async function guardarEditar() {
+    const arts = Object.entries(seleccionEditar)
+      .filter(([, v]) => v.cantidad > 0)
+      .map(([id, v]) => ({
+        id_articulo:     Number(id),
+        cantidad:        v.cantidad,
+        precio_unitario: v.precio_unitario || 0,
+      }));
+    if (arts.length === 0) {
+      alert("Selecciona al menos un artículo.");
+      return;
+    }
+    setGuardandoEditar(true);
+    try {
+      await api.put(`/rentas/${rentaEditar.id_renta}`, {
+        ...formEditar,
+        fecha_devolucion: formEditar.fecha_devolucion || null,
+        articulos: arts,
+      });
+      setRentaEditar(null);
+      await cargar();
+    } catch (err) {
+      alert(err?.response?.data?.detail || "Error al guardar.");
+    } finally {
+      setGuardandoEditar(false);
+    }
+  }
+
+  function actualizarSeleccionEditar(idArticulo, campo, valor) {
+    setSeleccionEditar(prev => ({
+      ...prev,
+      [idArticulo]: {
+        cantidad: 0,
+        precio_unitario: 0,
+        ...prev[idArticulo],
+        [campo]: Math.max(0, parseFloat(valor) || 0),
+      },
+    }));
+  }
+
+  function totalEditar() {
+    return Object.values(seleccionEditar)
+      .filter(v => v.cantidad > 0)
+      .reduce((acc, v) => acc + v.cantidad * v.precio_unitario, 0);
+  }
+
+  function cantSeleccionadosEditar() {
+    return Object.values(seleccionEditar).filter(v => v.cantidad > 0).length;
+  }
+
+  // ── Nueva renta ────────────────────────────────────────────────────────
   function actualizarSeleccion(idArticulo, campo, valor) {
     setSeleccion(prev => ({
       ...prev,
@@ -136,9 +232,16 @@ export default function Rentas() {
     }
   }
 
+  // ── Filtros ────────────────────────────────────────────────────────────
   const articulosFiltrados = articulos.filter(a => {
     const coincide  = coincideFlexible(a.nombre, busqueda);
     const categoria = !filtroCategoria || a.id_categoria === Number(filtroCategoria);
+    return coincide && categoria;
+  });
+
+  const articulosFiltradosEditar = articulos.filter(a => {
+    const coincide  = coincideFlexible(a.nombre, busquedaEditar);
+    const categoria = !filtroCatEditar || a.id_categoria === Number(filtroCatEditar);
     return coincide && categoria;
   });
 
@@ -201,12 +304,9 @@ export default function Rentas() {
                     ${Number(r.total).toLocaleString("es-MX", { minimumFractionDigits: 2 })}
                   </td>
                   <td className="px-4 py-3">
-                    {/* Badge clickeable para cambiar estado */}
                     <button
                       onClick={() => { setEditandoEstado(r); setNuevoEstado(r.estado); }}
-                      className="group/estado"
-                      title="Cambiar estado"
-                    >
+                      className="group/estado" title="Cambiar estado">
                       <Badge tono={TONO_ESTADO[r.estado] || "neutro"}>
                         {r.estado}
                         <Pencil size={10} className="inline ml-1 opacity-0 group-hover/estado:opacity-60" />
@@ -215,6 +315,10 @@ export default function Rentas() {
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-3 justify-end">
+                      <button onClick={() => abrirEditar(r)}
+                        className="flex items-center gap-1 text-xs font-medium text-ink-soft hover:text-ink">
+                        <Pencil size={13} /> Editar
+                      </button>
                       <button onClick={() => abrirPdf(`/pdf/renta/${r.id_renta}/trabajadores`)}
                         className="flex items-center gap-1 text-xs font-medium text-ink-soft hover:text-ink">
                         <Download size={13} /> Trabajadores
@@ -232,7 +336,7 @@ export default function Rentas() {
         )}
       </div>
 
-      {/* Modal nueva renta — Paso 1 */}
+      {/* ── Modal nueva renta — Paso 1 ─────────────────────────────────── */}
       <Modal abierto={modalNueva && paso === 1} onCerrar={() => setModalNueva(false)} titulo="Nueva renta">
         <div className="flex flex-col gap-4">
           <Campo etiqueta="Nombre del cliente">
@@ -279,98 +383,104 @@ export default function Rentas() {
         </div>
       </Modal>
 
-      {/* Paso 2: artículos */}
+      {/* ── Paso 2 nueva: artículos ────────────────────────────────────── */}
       {modalNueva && paso === 2 && (
-        <div className="fixed inset-0 z-50 bg-ink/40 flex items-center justify-center p-4">
-          <div className="bg-paper rounded-2xl w-full max-w-3xl flex flex-col" style={{ maxHeight: "90vh" }}>
-            <div className="px-6 pt-6 pb-4 border-b border-line shrink-0">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="font-display text-lg font-semibold">Seleccionar artículos</h2>
-                {seleccionados.length > 0 && (
-                  <span className="text-sm font-medium text-gold-deep">
-                    {seleccionados.length} artículo{seleccionados.length !== 1 ? "s" : ""} ·
-                    ${totalCotizacion().toLocaleString("es-MX", { minimumFractionDigits: 2 })}
-                  </span>
-                )}
-              </div>
-              <div className="flex gap-2 flex-wrap">
-                <div className="relative flex-1 min-w-[180px]">
-                  <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-soft" />
-                  <input value={busqueda} onChange={e => setBusqueda(e.target.value)}
-                    placeholder="Buscar artículo..."
-                    className="w-full pl-8 pr-3 py-2 rounded-lg border border-line bg-paper text-sm
-                               focus:outline-none focus:ring-2 focus:ring-gold/40" />
-                </div>
-                <div className="flex gap-1.5 flex-wrap">
-                  <button onClick={() => setFiltroCategoria("")}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                      filtroCategoria === "" ? "bg-ink text-white" : "bg-mist text-ink-soft hover:bg-paper border border-line"
-                    }`}>Todos</button>
-                  {categorias.map(cat => (
-                    <button key={cat.id_categoria}
-                      onClick={() => setFiltroCategoria(
-                        filtroCategoria === String(cat.id_categoria) ? "" : String(cat.id_categoria)
-                      )}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                        filtroCategoria === String(cat.id_categoria)
-                          ? "bg-gold-deep text-white"
-                          : "bg-mist text-ink-soft hover:bg-paper border border-line"
-                      }`}>{cat.nombre}</button>
-                  ))}
-                </div>
-              </div>
-            </div>
-            <div className="overflow-y-auto flex-1 px-6 py-3">
-              {articulosFiltrados.length === 0 ? (
-                <p className="text-center text-ink-soft text-sm py-8">No se encontraron artículos.</p>
-              ) : (
-                <div className="flex flex-col gap-0 rounded-xl border border-line overflow-hidden">
-                  {articulosFiltrados.map((a, idx) => {
-                    const cant   = seleccion[a.id_articulo]?.cantidad || 0;
-                    const precio = seleccion[a.id_articulo]?.precio_unitario || 0;
-                    const cat    = categorias.find(c => c.id_categoria === a.id_categoria);
-                    return (
-                      <div key={a.id_articulo}
-                        className={`flex items-center gap-3 px-4 py-2.5 border-b border-line last:border-0
-                                    ${cant > 0 ? "bg-gold-pale/40" : idx % 2 === 0 ? "bg-paper" : "bg-mist/30"}`}>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium truncate">{a.nombre}</p>
-                          <p className="text-xs text-ink-soft">{cat?.nombre} · {a.cantidad_disponible} disp.</p>
-                        </div>
-                        <div className="flex items-center gap-1 shrink-0">
-                          <span className="text-xs text-ink-soft">Cant.</span>
-                          <input type="number" min="0" value={cant || ""} placeholder="0"
-                            onChange={e => actualizarSeleccion(a.id_articulo, "cantidad", e.target.value)}
-                            className="w-14 text-center text-sm border border-line rounded-lg py-1
-                                       focus:outline-none focus:ring-2 focus:ring-gold/40 bg-paper" />
-                        </div>
-                        <div className="flex items-center gap-1 shrink-0">
-                          <span className="text-xs text-ink-soft">$</span>
-                          <input type="number" min="0" step="0.01" value={precio || ""} placeholder="0"
-                            onChange={e => actualizarSeleccion(a.id_articulo, "precio_unitario", e.target.value)}
-                            className="w-20 text-center text-sm border border-line rounded-lg py-1
-                                       focus:outline-none focus:ring-2 focus:ring-gold/40 bg-paper" />
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-            <div className="px-6 py-4 border-t border-line flex justify-between items-center shrink-0">
-              <Boton variante="fantasma" onClick={() => setPaso(1)}>← Atrás</Boton>
-              <div className="flex gap-2">
-                <Boton variante="fantasma" onClick={() => setModalNueva(false)}>Cancelar</Boton>
-                <Boton variante="dorado" onClick={guardar} disabled={guardando}>
-                  {guardando ? "Guardando..." : "Guardar renta"}
-                </Boton>
-              </div>
-            </div>
-          </div>
-        </div>
+        <PanelArticulos
+          titulo="Seleccionar artículos"
+          articulos={articulosFiltrados}
+          categorias={categorias}
+          seleccion={seleccion}
+          busqueda={busqueda}
+          setBusqueda={setBusqueda}
+          filtroCategoria={filtroCategoria}
+          setFiltroCategoria={setFiltroCategoria}
+          onActualizar={actualizarSeleccion}
+          total={totalCotizacion()}
+          cantSeleccionados={seleccionados.length}
+          onAtras={() => setPaso(1)}
+          onCancelar={() => setModalNueva(false)}
+          onGuardar={guardar}
+          guardando={guardando}
+        />
       )}
 
-      {/* Modal cambiar estado */}
+      {/* ── Modal editar renta — Paso 1 ────────────────────────────────── */}
+      <Modal
+        abierto={!!rentaEditar && pasoEditar === 1}
+        onCerrar={() => setRentaEditar(null)}
+        titulo="Editar renta">
+        {cargandoEditar ? (
+          <p className="text-ink-soft text-sm py-4 text-center">Cargando...</p>
+        ) : (
+          <div className="flex flex-col gap-4">
+            <Campo etiqueta="Nombre del cliente">
+              <Input required value={formEditar.nombre_cliente}
+                onChange={e => setFormEditar({ ...formEditar, nombre_cliente: e.target.value })} />
+            </Campo>
+            <div className="grid grid-cols-2 gap-3">
+              <Campo etiqueta="Teléfono">
+                <Input value={formEditar.telefono}
+                  onChange={e => setFormEditar({ ...formEditar, telefono: e.target.value })} />
+              </Campo>
+              <Campo etiqueta="Estado">
+                <Select value={formEditar.estado}
+                  onChange={e => setFormEditar({ ...formEditar, estado: e.target.value })}>
+                  {ESTADOS.map(s => <option key={s} value={s}>{s}</option>)}
+                </Select>
+              </Campo>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Campo etiqueta="Fecha de entrega">
+                <Input type="date" required value={formEditar.fecha_entrega}
+                  onChange={e => setFormEditar({ ...formEditar, fecha_entrega: e.target.value })} />
+              </Campo>
+              <Campo etiqueta="Fecha de devolución">
+                <Input type="date" value={formEditar.fecha_devolucion}
+                  onChange={e => setFormEditar({ ...formEditar, fecha_devolucion: e.target.value })} />
+              </Campo>
+            </div>
+            <Campo etiqueta="Notas">
+              <TextArea value={formEditar.notas}
+                onChange={e => setFormEditar({ ...formEditar, notas: e.target.value })} />
+            </Campo>
+            <div className="flex justify-end gap-2 pt-2">
+              <Boton variante="fantasma" onClick={() => setRentaEditar(null)}>Cancelar</Boton>
+              <Boton variante="dorado" onClick={() => {
+                if (!formEditar.nombre_cliente || !formEditar.fecha_entrega) {
+                  alert("Nombre del cliente y fecha de entrega son obligatorios.");
+                  return;
+                }
+                setPasoEditar(2);
+              }}>
+                Siguiente →
+              </Boton>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* ── Paso 2 editar: artículos ───────────────────────────────────── */}
+      {rentaEditar && pasoEditar === 2 && (
+        <PanelArticulos
+          titulo="Editar artículos"
+          articulos={articulosFiltradosEditar}
+          categorias={categorias}
+          seleccion={seleccionEditar}
+          busqueda={busquedaEditar}
+          setBusqueda={setBusquedaEditar}
+          filtroCategoria={filtroCatEditar}
+          setFiltroCategoria={setFiltroCatEditar}
+          onActualizar={actualizarSeleccionEditar}
+          total={totalEditar()}
+          cantSeleccionados={cantSeleccionadosEditar()}
+          onAtras={() => setPasoEditar(1)}
+          onCancelar={() => setRentaEditar(null)}
+          onGuardar={guardarEditar}
+          guardando={guardandoEditar}
+        />
+      )}
+
+      {/* ── Modal cambiar estado ───────────────────────────────────────── */}
       <Modal abierto={!!editandoEstado} onCerrar={() => setEditandoEstado(null)} titulo="Cambiar estado de la renta">
         <form onSubmit={guardarEstado} className="flex flex-col gap-4">
           <p className="text-sm text-ink-soft">
@@ -393,6 +503,106 @@ export default function Rentas() {
         onCerrar={() => setRentaCotizacion(null)}
         urlPdf={`/pdf/renta/${rentaCotizacion}/cotizacion`}
       />
+    </div>
+  );
+}
+
+// ── Componente compartido: panel de selección de artículos ─────────────────
+function PanelArticulos({
+  titulo, articulos, categorias, seleccion,
+  busqueda, setBusqueda, filtroCategoria, setFiltroCategoria,
+  onActualizar, total, cantSeleccionados,
+  onAtras, onCancelar, onGuardar, guardando,
+}) {
+  return (
+    <div className="fixed inset-0 z-50 bg-ink/40 flex items-center justify-center p-4">
+      <div className="bg-paper rounded-2xl w-full max-w-3xl flex flex-col" style={{ maxHeight: "90vh" }}>
+        <div className="px-6 pt-6 pb-4 border-b border-line shrink-0">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="font-display text-lg font-semibold">{titulo}</h2>
+            {cantSeleccionados > 0 && (
+              <span className="text-sm font-medium text-gold-deep">
+                {cantSeleccionados} artículo{cantSeleccionados !== 1 ? "s" : ""} ·
+                ${total.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+              </span>
+            )}
+          </div>
+          <div className="flex gap-2 flex-wrap">
+            <div className="relative flex-1 min-w-[180px]">
+              <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-soft" />
+              <input value={busqueda} onChange={e => setBusqueda(e.target.value)}
+                placeholder="Buscar artículo..."
+                className="w-full pl-8 pr-3 py-2 rounded-lg border border-line bg-paper text-sm
+                           focus:outline-none focus:ring-2 focus:ring-gold/40" />
+            </div>
+            <div className="flex gap-1.5 flex-wrap">
+              <button onClick={() => setFiltroCategoria("")}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                  filtroCategoria === "" ? "bg-ink text-white" : "bg-mist text-ink-soft hover:bg-paper border border-line"
+                }`}>Todos</button>
+              {categorias.map(cat => (
+                <button key={cat.id_categoria}
+                  onClick={() => setFiltroCategoria(
+                    filtroCategoria === String(cat.id_categoria) ? "" : String(cat.id_categoria)
+                  )}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                    filtroCategoria === String(cat.id_categoria)
+                      ? "bg-gold-deep text-white"
+                      : "bg-mist text-ink-soft hover:bg-paper border border-line"
+                  }`}>{cat.nombre}</button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="overflow-y-auto flex-1 px-6 py-3">
+          {articulos.length === 0 ? (
+            <p className="text-center text-ink-soft text-sm py-8">No se encontraron artículos.</p>
+          ) : (
+            <div className="flex flex-col gap-0 rounded-xl border border-line overflow-hidden">
+              {articulos.map((a, idx) => {
+                const cant   = seleccion[a.id_articulo]?.cantidad || 0;
+                const precio = seleccion[a.id_articulo]?.precio_unitario || 0;
+                const cat    = categorias.find(c => c.id_categoria === a.id_categoria);
+                return (
+                  <div key={a.id_articulo}
+                    className={`flex items-center gap-3 px-4 py-2.5 border-b border-line last:border-0
+                                ${cant > 0 ? "bg-gold-pale/40" : idx % 2 === 0 ? "bg-paper" : "bg-mist/30"}`}>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium truncate">{a.nombre}</p>
+                      <p className="text-xs text-ink-soft">{cat?.nombre} · {a.cantidad_disponible} disp.</p>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <span className="text-xs text-ink-soft">Cant.</span>
+                      <input type="number" min="0" value={cant || ""} placeholder="0"
+                        onChange={e => onActualizar(a.id_articulo, "cantidad", e.target.value)}
+                        className="w-14 text-center text-sm border border-line rounded-lg py-1
+                                   focus:outline-none focus:ring-2 focus:ring-gold/40 bg-paper" />
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <span className="text-xs text-ink-soft">$</span>
+                      <input type="number" min="0" step="0.01" value={precio || ""} placeholder="0"
+                        onChange={e => onActualizar(a.id_articulo, "precio_unitario", e.target.value)}
+                        className="w-20 text-center text-sm border border-line rounded-lg py-1
+                                   focus:outline-none focus:ring-2 focus:ring-gold/40 bg-paper" />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        <div className="px-6 py-4 border-t border-line flex justify-between items-center shrink-0">
+          <Boton variante="fantasma" onClick={onAtras}>← Atrás</Boton>
+          <div className="flex gap-2">
+            <Boton variante="fantasma" onClick={onCancelar}>Cancelar</Boton>
+            <Boton variante="dorado" onClick={onGuardar} disabled={guardando}>
+              {guardando ? "Guardando..." : "Guardar renta"}
+            </Boton>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
