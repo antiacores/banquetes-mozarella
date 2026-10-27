@@ -1,7 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import Column, Integer, String, Date, Numeric, Text, ForeignKey
-from sqlalchemy.ext.declarative import declarative_base
 from pydantic import BaseModel
 from typing import Optional
 from datetime import date
@@ -9,28 +7,6 @@ from app.database import get_db
 from app import models
 
 router = APIRouter(prefix="/rentas", tags=["Rentas"])
-
-Base = declarative_base()
-
-# ── Modelos SQLAlchemy ────────────────────────────────────────────────────────
-
-class Renta(Base):
-    __tablename__ = "renta"
-    id_renta         = Column(Integer, primary_key=True, index=True)
-    nombre_cliente   = Column(String(150), nullable=False)
-    telefono         = Column(String(20))
-    fecha_entrega    = Column(Date, nullable=False)
-    fecha_devolucion = Column(Date)
-    estado           = Column(String(30), default="cotizacion")
-    notas            = Column(Text)
-
-class DetalleRenta(Base):
-    __tablename__ = "detallerenta"
-    id_detalle_renta = Column(Integer, primary_key=True, index=True)
-    id_renta         = Column(Integer, ForeignKey("renta.id_renta"), nullable=False)
-    id_articulo      = Column(Integer, ForeignKey("articulo.id_articulo"), nullable=False)
-    cantidad         = Column(Integer, nullable=False)
-    precio_unitario  = Column(Numeric(10, 2), default=0)
 
 # ── Schemas Pydantic ──────────────────────────────────────────────────────────
 
@@ -41,11 +17,11 @@ class ArticuloRentaEntrada(BaseModel):
 
 class RentaCrear(BaseModel):
     nombre_cliente:   str
-    telefono:         Optional[str] = None
+    telefono:         Optional[str]  = None
     fecha_entrega:    date
     fecha_devolucion: Optional[date] = None
-    estado:           str = "cotizacion"
-    notas:            Optional[str] = None
+    estado:           str            = "cotizacion"
+    notas:            Optional[str]  = None
     articulos:        list[ArticuloRentaEntrada]
 
 class RentaActualizar(BaseModel):
@@ -55,8 +31,8 @@ class RentaActualizar(BaseModel):
     fecha_devolucion: Optional[date] = None
     estado:           Optional[str]  = None
     notas:            Optional[str]  = None
-    # Si se envía esta lista, se reemplaza el detalle completo.
-    # Si NO se envía (None), sólo se actualizan los campos generales.
+    # Si se incluye esta lista, se reemplaza el detalle completo.
+    # Si viene None (campo ausente), solo se actualizan los campos generales.
     articulos:        Optional[list[ArticuloRentaEntrada]] = None
 
 class ArticuloRentaRespuesta(BaseModel):
@@ -94,9 +70,9 @@ def _build_respuesta(renta, db: Session) -> dict:
         art = db.query(models.Articulo).filter(
             models.Articulo.id_articulo == d.id_articulo
         ).first()
-        precio = float(d.precio_unitario) if d.precio_unitario else 0.0
+        precio   = float(d.precio_unitario) if d.precio_unitario is not None else 0.0
         subtotal = precio * d.cantidad
-        total += subtotal
+        total   += subtotal
         articulos_resp.append({
             "id_detalle_renta": d.id_detalle_renta,
             "id_articulo":      d.id_articulo,
@@ -117,11 +93,12 @@ def _build_respuesta(renta, db: Session) -> dict:
         "articulos":        articulos_resp,
     }
 
+
 def _reemplazar_articulos(id_renta: int, articulos: list[ArticuloRentaEntrada], db: Session):
-    """Borra los DetalleRenta actuales y crea los nuevos."""
+    """Elimina los DetalleRenta actuales e inserta los nuevos."""
     db.query(models.DetalleRenta).filter(
         models.DetalleRenta.id_renta == id_renta
-    ).delete()
+    ).delete(synchronize_session=False)
 
     for a in articulos:
         nuevo = models.DetalleRenta(
@@ -131,6 +108,7 @@ def _reemplazar_articulos(id_renta: int, articulos: list[ArticuloRentaEntrada], 
             precio_unitario=a.precio_unitario,
         )
         db.add(nuevo)
+
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
@@ -177,10 +155,13 @@ def actualizar_renta(id_renta: int, datos: RentaActualizar, db: Session = Depend
     if not renta:
         raise HTTPException(status_code=404, detail="Renta no encontrada")
 
-    # Actualizar campos generales (solo los que vienen en el body)
+    # Actualizar solo los campos generales que llegaron en el body
     campos = datos.model_dump(exclude_unset=True, exclude={"articulos"})
     for campo, valor in campos.items():
         setattr(renta, campo, valor)
+
+    db.commit()
+    db.refresh(renta)
 
     # Si vienen artículos, reemplazar el detalle completo
     if datos.articulos is not None:
@@ -190,9 +171,8 @@ def actualizar_renta(id_renta: int, datos: RentaActualizar, db: Session = Depend
                 detail="La lista de artículos no puede estar vacía."
             )
         _reemplazar_articulos(id_renta, datos.articulos, db)
+        db.commit()
 
-    db.commit()
-    db.refresh(renta)
     return _build_respuesta(renta, db)
 
 
@@ -204,6 +184,6 @@ def eliminar_renta(id_renta: int, db: Session = Depends(get_db)):
 
     db.query(models.DetalleRenta).filter(
         models.DetalleRenta.id_renta == id_renta
-    ).delete()
+    ).delete(synchronize_session=False)
     db.delete(renta)
     db.commit()
