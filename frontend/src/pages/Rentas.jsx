@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plus, FileText, Download, Search, Pencil } from "lucide-react";
+import { Plus, FileText, Download, Search, Pencil, Trash2 } from "lucide-react";
 import { listarArticulos, listarCategorias } from "../lib/api";
 import { api } from "../lib/api";
 import { Boton, Modal, Campo, Input, Select, TextArea, Badge } from "../components/ui";
@@ -78,6 +78,16 @@ export default function Rentas() {
   useEffect(() => { cargar(); }, []);
 
   // ── Editar estado rápido ───────────────────────────────────────────────
+  async function eliminarRenta(r) {
+    if (!confirm(`¿Eliminar la renta de "${r.nombre_cliente}"? Esta acción no se puede deshacer.`)) return;
+    try {
+      await api.delete(`/rentas/${r.id_renta}`);
+      await cargar();
+    } catch (err) {
+      alert(err?.response?.data?.detail || "Error al eliminar.");
+    }
+  }
+
   async function guardarEstado(e) {
     e.preventDefault();
     try {
@@ -326,6 +336,10 @@ export default function Rentas() {
                       <button onClick={() => setRentaCotizacion(r.id_renta)}
                         className="flex items-center gap-1 text-xs font-medium text-gold-deep hover:underline">
                         <FileText size={13} /> Cotización
+                      </button>
+                      <button onClick={() => eliminarRenta(r)}
+                        className="flex items-center gap-1 text-xs font-medium text-alert hover:underline">
+                        <Trash2 size={13} /> Eliminar
                       </button>
                     </div>
                   </td>
